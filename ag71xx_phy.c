@@ -82,7 +82,7 @@ void ag71xx_phy_set_phy_state(struct ag71xx *ag, int state)
 		//отрубаем трансивер
 		bmcr |= BMCR_PDOWN;
 	}
-	printk(KERN_DEBUG "%s for dev := '%s', phy_dev = 0x%p\n", __func__, ag->dev->name, ag->phy_dev);
+	//printk(KERN_DEBUG "%s for dev := '%s', phy_dev = 0x%p\n", __func__, ag->dev->name, ag->phy_dev);
 	if(ag->phy_dev){
 		phy_write(ag->phy_dev, MII_BMCR, bmcr);
 	}
@@ -92,7 +92,7 @@ void ag71xx_phy_start(struct ag71xx *ag)
 {
 	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
 
-	printk(KERN_DEBUG "%s for dev := '%s'\n", __func__, ag->dev->name);
+	//printk(KERN_DEBUG "%s for dev := '%s'\n", __func__, ag->dev->name);
 	if (ag->phy_dev) {
 		ag71xx_phy_set_phy_state(ag, 1);
 		phy_start(ag->phy_dev);
@@ -109,7 +109,7 @@ void ag71xx_phy_stop(struct ag71xx *ag)
 	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
 	unsigned long flags;
 
-	printk(KERN_DEBUG "%s for dev := '%s'\n", __func__, ag->dev->name);
+	//printk(KERN_DEBUG "%s for dev := '%s'\n", __func__, ag->dev->name);
 
 	if (ag->phy_dev){
 		phy_stop(ag->phy_dev);
@@ -251,8 +251,8 @@ void ag71xx_phy_connect_for_slaves(struct ag71xx_slave *ags){
 	struct phy_device *phydev = ag71xx_ar7240_get_phydev_for_slave(ags);
 	if(phydev){
 		printk(KERN_DEBUG "%s: PHY found at %s, uid=%08x, irq=0x%x\n",
-		ags->dev->name,
-		dev_name(&phydev->dev),
+					 ags->dev->name,
+					 dev_name(&phydev->dev),
 		phydev->phy_id, phydev->irq);
 		ags->phy_dev = phy_connect(ags->dev, dev_name(&phydev->dev),
 			  &ag71xx_phy_link_adjust_for_slave,
@@ -265,8 +265,8 @@ void ag71xx_phy_connect_for_slaves(struct ag71xx_slave *ags){
 		}
 	 	phydev->supported &= PHY_BASIC_FEATURES;
 		phydev->advertising = phydev->supported;
-		printk(KERN_DEBUG "%s:connected to PHY at %s [uid=%08x, driver=%s]\n",
-					 ags->dev->name, dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name);
+		/* printk(KERN_DEBUG "%s:connected to PHY at %s [uid=%08x, driver=%s]\n",
+					 ags->dev->name, dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name); */
 	}
 }
 
