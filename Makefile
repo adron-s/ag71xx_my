@@ -15,6 +15,7 @@ ag71xx-y	+= ag71xx_ar7240.o
 
 ag71xx-$(CONFIG_AG71XX_DEBUG_FS)	+= ag71xx_debugfs.o
 ag71xx-$(CONFIG_AG71XX_AR8216_SUPPORT)	+= ag71xx_ar8216.o
+ag71xx-$(CONFIG_AG71XX_AR9344_SUPPORT)	+= ag71xx_ar9344.o
 
 obj-$(CONFIG_AG71XX)	+= ag71xx.o
 
