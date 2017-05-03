@@ -42,11 +42,59 @@ static void ag71xx_phy_link_adjust(struct net_device *dev)
 	spin_unlock_irqrestore(&ag->lock, flags);
 }
 
+static void ag71xx_phy_link_adjust_for_slave(struct net_device *dev)
+{
+	struct ag71xx_slave *ags = netdev_priv(dev);
+	struct phy_device *phydev = ags->phy_dev;
+	unsigned long flags;
+	int status_change = 0;
+
+	spin_lock_irqsave(&ags->lock, flags);
+
+	if (phydev->link) {
+		if (ags->duplex != phydev->duplex
+		    || ags->speed != phydev->speed) {
+			status_change = 1;
+		}
+	}
+
+	if (phydev->link != ags->link)
+		status_change = 1;
+
+	ags->link = phydev->link;
+	ags->duplex = phydev->duplex;
+	ags->speed = phydev->speed;
+
+	//if (status_change)
+		//ag71xx_link_adjust(ags);
+
+	spin_unlock_irqrestore(&ags->lock, flags);
+}
+
+void ag71xx_phy_set_phy_state(struct ag71xx *ag, int state)
+{
+	u32 bmcr = 0;
+	if(state){
+		bmcr &= ~BMCR_PDOWN; //включаем питание на трансивер
+		//на всякий случай еще рестартанем трансивер и автонеготинацию
+		bmcr |= BMCR_RESET | BMCR_ANENABLE;
+	}else{
+		//отрубаем трансивер
+		bmcr |= BMCR_PDOWN;
+	}
+	printk(KERN_DEBUG "%s for dev := '%s', phy_dev = 0x%p\n", __func__, ag->dev->name, ag->phy_dev);
+	if(ag->phy_dev){
+		phy_write(ag->phy_dev, MII_BMCR, bmcr);
+	}
+}
+
 void ag71xx_phy_start(struct ag71xx *ag)
 {
 	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
 
+	printk(KERN_DEBUG "%s for dev := '%s'\n", __func__, ag->dev->name);
 	if (ag->phy_dev) {
+		ag71xx_phy_set_phy_state(ag, 1);
 		phy_start(ag->phy_dev);
 	} else if (pdata->mii_bus_dev && pdata->switch_data) {
 		ag71xx_ar7240_start(ag);
@@ -61,8 +109,12 @@ void ag71xx_phy_stop(struct ag71xx *ag)
 	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
 	unsigned long flags;
 
-	if (ag->phy_dev)
+	printk(KERN_DEBUG "%s for dev := '%s'\n", __func__, ag->dev->name);
+
+	if (ag->phy_dev){
 		phy_stop(ag->phy_dev);
+		ag71xx_phy_set_phy_state(ag, 0);
+	}
 	else if (pdata->mii_bus_dev && pdata->switch_data)
 		ag71xx_ar7240_stop(ag);
 
@@ -155,6 +207,8 @@ static int ag71xx_phy_connect_multi(struct ag71xx *ag)
 	ag->speed = 0;
 	ag->duplex = -1;
 
+  ag71xx_phy_set_phy_state(ag, 0); //initial state для WAN порта!
+
 	return ret;
 }
 
@@ -193,6 +247,29 @@ static struct mii_bus *dev_to_mii_bus(struct device *dev)
 	return NULL;
 }
 
+void ag71xx_phy_connect_for_slaves(struct ag71xx_slave *ags){
+	struct phy_device *phydev = ag71xx_ar7240_get_phydev_for_slave(ags);
+	if(phydev){
+		printk(KERN_DEBUG "%s: PHY found at %s, uid=%08x, irq=0x%x\n",
+		ags->dev->name,
+		dev_name(&phydev->dev),
+		phydev->phy_id, phydev->irq);
+		ags->phy_dev = phy_connect(ags->dev, dev_name(&phydev->dev),
+			  &ag71xx_phy_link_adjust_for_slave,
+			  PHY_INTERFACE_MODE_MII);
+
+		if (IS_ERR(ags->phy_dev)){
+			printk(KERN_ERR "%s: could not connect to PHY\n",
+					 ags->dev->name);
+			return;
+		}
+	 	phydev->supported &= PHY_BASIC_FEATURES;
+		phydev->advertising = phydev->supported;
+		printk(KERN_DEBUG "%s:connected to PHY at %s [uid=%08x, driver=%s]\n",
+					 ags->dev->name, dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name);
+	}
+}
+
 int ag71xx_phy_connect(struct ag71xx *ag)
 {
 	struct ag71xx_platform_data *pdata = ag71xx_get_pdata(ag);
@@ -216,10 +293,10 @@ int ag71xx_phy_connect(struct ag71xx *ag)
 	}
 
 	if (pdata->switch_data)
-		return ag71xx_ar7240_init(ag);
+		return ag71xx_ar7240_init(ag); //initial state для LAN портов свитча
 
 	if (pdata->phy_mask)
-		return ag71xx_phy_connect_multi(ag);
+		return ag71xx_phy_connect_multi(ag); //а вот эта ф-я на последок сделает initial state для WAN порта!
 
 	return ag71xx_phy_connect_fixed(ag);
 }

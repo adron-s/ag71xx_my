@@ -125,6 +125,8 @@
 #define AR7240_PORT_CTRL_VLAN_MODE_STRIP 1
 #define AR7240_PORT_CTRL_VLAN_MODE_ADD	2
 #define AR7240_PORT_CTRL_VLAN_MODE_DOUBLE_TAG 3
+#define AR7240_PORT_CTRL_LOCK_DROP	BIT(5)
+#define AR7240_PORT_CTRL_PORT_LOCK	BIT(6)
 #define AR7240_PORT_CTRL_IGMP_SNOOP	BIT(10)
 #define AR7240_PORT_CTRL_HEADER		BIT(11)
 #define AR7240_PORT_CTRL_MAC_LOOP	BIT(12)
@@ -189,7 +191,7 @@
 
 #define AR7240_PORT_CPU		0
 #define AR7240_NUM_PORTS	6
-#define AR7240_NUM_PHYS		5
+#define AR7240_NUM_PHYS		5 /* 5-е phy это уже WAN! */
 
 #define AR7240_PHY_ID1		0x004d
 #define AR7240_PHY_ID2		0xd041
@@ -630,13 +632,13 @@ ar7240sw_phy_poll_reset(struct mii_bus *bus)
 	for (elapsed = sleep_msecs; elapsed <= 600;
 	     elapsed += sleep_msecs) {
 		msleep(sleep_msecs);
-		for (i = 0; i < AR7240_NUM_PHYS; i++) {
+		for (i = 0; i < AR7240_NUM_PHYS - 1; i++) {
 			ret = ar7240sw_phy_read(bus, i, MII_BMCR);
 			if (ret < 0)
 				return ret;
 			if (ret & BMCR_RESET)
 				break;
-			if (i == AR7240_NUM_PHYS - 1) {
+			if (i == AR7240_NUM_PHYS - 2) {
 				usleep_range(1000, 2000);
 				return 0;
 			}
@@ -666,7 +668,7 @@ static int ar7240sw_reset(struct ar7240sw *as)
 				AR7240_MASK_CTRL_SOFT_RESET, 0, 1000);
 
 	/* setup PHYs */
-	for (i = 0; i < AR7240_NUM_PHYS; i++) {
+	for (i = 0; i < AR7240_NUM_PHYS - 1; i++) {
 		ar7240sw_phy_write(mii, i, MII_ADVERTISE,
 				   ADVERTISE_ALL | ADVERTISE_PAUSE_CAP |
 				   ADVERTISE_PAUSE_ASYM);
@@ -709,8 +711,8 @@ static void ar7240sw_setup_port(struct ar7240sw *as, unsigned port, u8 portmask)
 	}
 	//Disable learning for all ports!
 	ctrl &= ~AR7240_PORT_CTRL_LEARN;
-	ctrl &= ~BIT(5); //Disarm LOCK_DROP_EN
-	ctrl |= BIT(6); //Arm PORT_LOCK_EN
+	ctrl &= ~AR7240_PORT_CTRL_LOCK_DROP; //Disarm LOCK_DROP_EN
+	ctrl |= AR7240_PORT_CTRL_PORT_LOCK; //Arm PORT_LOCK_EN
 
 	/* Set the default VID for this port */
 	if (as->vlan) {
@@ -1261,7 +1263,17 @@ struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag)
 	return &as->swdev;
 }
 
-static void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
+struct phy_device *ag71xx_ar7240_get_phydev_for_slave(struct ag71xx_slave *ags){
+	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ags->master_ag);
+	if(swdev){
+		struct ar7240sw *as = sw_to_ar7240(swdev);
+		struct phy_device *phydev = as->mii_bus->phy_map[ags->port_num - 1];
+		return phydev;
+	}
+	return NULL;
+}
+
+void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
 {
 	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ag);
 	if(swdev){
@@ -1288,16 +1300,6 @@ static void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int s
 	}
 }
 
-void ag71xx_ar7240_disable_port(struct ag71xx *ag, unsigned port)
-{
-	ag71xx_ar7240_set_port_state(ag, port, 0);
-}
-
-void ag71xx_ar7240_enable_port(struct ag71xx *ag, unsigned port)
-{
-	ag71xx_ar7240_set_port_state(ag, port, 1);
-}
-
 void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state)
 {
 	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ag);
@@ -1306,5 +1308,3 @@ void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state)
 		as->phy_init_pdown = state;
 	}
 }
-
-

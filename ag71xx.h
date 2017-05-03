@@ -191,9 +191,13 @@ struct ag71xx_slave {
 	int is_master; //must be a first var!
 	int port_num;
 	int port_mask;
+	spinlock_t		lock;
 	struct net_device	*dev;
 	struct ag71xx *master_ag;
+	struct phy_device	*phy_dev;
 	unsigned int link;
+	unsigned int		speed;
+	int			duplex;
 	struct delayed_work	link_work;
 };
 
@@ -204,6 +208,7 @@ int ag71xx_mdio_driver_init(void) __init;
 void ag71xx_mdio_driver_exit(void);
 
 int ag71xx_phy_connect(struct ag71xx *ag);
+void ag71xx_phy_connect_for_slaves(struct ag71xx_slave *ags);
 void ag71xx_phy_disconnect(struct ag71xx *ag);
 void ag71xx_phy_start(struct ag71xx *ag);
 void ag71xx_phy_stop(struct ag71xx *ag);
@@ -515,8 +520,8 @@ int ag71xx_ar7240_init(struct ag71xx *ag);
 void ag71xx_ar7240_cleanup(struct ag71xx *ag);
 int ag71xx_ar7240_get_num_ports(struct ag71xx *ag);
 struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag);
-void ag71xx_ar7240_enable_port(struct ag71xx *ag, unsigned port);
-void ag71xx_ar7240_disable_port(struct ag71xx *ag, unsigned port);
+struct phy_device *ag71xx_ar7240_get_phydev_for_slave(struct ag71xx_slave *ags);
+void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state);
 void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state);
 
 int ag71xx_mdio_mii_read(struct ag71xx_mdio *am, int addr, int reg);

@@ -734,6 +734,8 @@ static int ag71xx_open(struct net_device *dev)
 	ag71xx_wr(ag, AG71XX_REG_MAC_MFL, max_frame_len);
 	ag71xx_hw_set_macaddr(ag, dev->dev_addr);
 
+	printk(KERN_DEBUG "%s: %s, has_switch = %d\n", __func__, dev->name, ag->has_switch);
+
 	ret = ag71xx_hw_enable(ag);
 	if (ret)
 		goto err;
@@ -1313,7 +1315,9 @@ static int slave_dev_open(struct net_device *dev)
 		 так как он проинитит свитч ! */
 	ret = dev_open(master_dev);
 	if(!ret){
-		ag71xx_ar7240_enable_port(ags->master_ag, ags->port_num);
+		ag71xx_ar7240_set_port_state(ags->master_ag, ags->port_num, 1);
+		if(ags->phy_dev)
+			phy_start(ags->phy_dev);
 		netif_start_queue(dev);
 	}
 	return ret;
@@ -1324,7 +1328,9 @@ static int slave_dev_stop(struct net_device *dev)
   struct ag71xx_slave *ags = netdev_priv(dev);
 	cancel_delayed_work_sync(&ags->link_work);
 	netif_stop_queue(dev);
-	ag71xx_ar7240_disable_port(ags->master_ag, ags->port_num);
+	ag71xx_ar7240_set_port_state(ags->master_ag, ags->port_num, 0);
+	if(ags->phy_dev)
+		phy_stop(ags->phy_dev);
 	return 0;
 }
 
@@ -1340,6 +1346,8 @@ static void slave_link_function(struct work_struct *work){
 	}
 	memset(&port_link, '\0', sizeof(port_link));
 	if(!swdev->ops->get_port_link(swdev, ags->port_num, &port_link)){
+		ags->speed = port_link.speed;
+		ags->duplex = port_link.duplex;
 		if(port_link.link != ags->link){
 			ags->link = port_link.link;
 			if(!ags->link){ //if link is DOWN
@@ -1398,6 +1406,36 @@ static const char *ag71xx_get_phy_if_mode_name(phy_interface_t mode)
 	return "unknown";
 }
 
+static int slave_ethtool_get_settings(struct net_device *dev,
+				       struct ethtool_cmd *cmd)
+{
+	struct ag71xx_slave *ags = netdev_priv(dev);
+	struct phy_device *phydev = ags->phy_dev;
+
+	if (!phydev)
+		return -ENODEV;
+
+	return phy_ethtool_gset(phydev, cmd);
+}
+
+static void slave_ethtool_get_drvinfo(struct net_device *dev,
+						struct ethtool_drvinfo *info)
+{
+	struct ag71xx_slave *ags = netdev_priv(dev);
+	strcpy(info->driver, ags->master_ag->pdev->dev.driver->name);
+	strcpy(info->version, AG71XX_DRV_VERSION);
+	strcpy(info->bus_info, dev_name(&ags->master_ag->pdev->dev));
+}
+
+
+struct ethtool_ops slave_ethtool_ops = {
+//	.set_settings	= ag71xx_ethtool_set_settings,
+	.get_settings	= slave_ethtool_get_settings,
+	.get_drvinfo	= slave_ethtool_get_drvinfo,
+	.get_link	= ethtool_op_get_link,
+};
+
+
 static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	struct platform_device *pdev = master_ag->pdev;
 	struct net_device *dev = NULL;
@@ -1428,6 +1466,7 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 		goto err_out;
 	}
 	ags = netdev_priv(dev);
+	spin_lock_init(&ags->lock);
 	ags->is_master = 0;
 	ags->port_num = port_num;
 	ags->port_mask = BIT(port_num);
@@ -1439,11 +1478,14 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 		 NETREG_UNINITIALIZED и не ренерирует событие об изменении статуса
 		 а просто тихонько правит нужный бит в dev->... */
 	ags->link = 0;
+	ags->speed = 0;
+	ags->duplex = 0;
 	netif_carrier_off(dev);
-	ag71xx_ar7240_disable_port(master_ag, ags->port_num);
+	ag71xx_ar7240_set_port_state(master_ag, ags->port_num, 0);
 
 	//dev->base_addr = (unsigned long)master_ag->mac_base + port_num;
 	dev->netdev_ops = &slave_dev_netdev_ops;
+	dev->ethtool_ops = &slave_ethtool_ops;
 	memcpy(dev->dev_addr, master_ag->dev->dev_addr, ETH_ALEN);
 	DEV_ADDR_ADD(dev->dev_addr, port_num - 1);
 	err = register_netdev(dev);
@@ -1452,6 +1494,7 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 		goto err;
 	}
 	ags->dev = dev;
+  ag71xx_phy_connect_for_slaves(ags);
 	//индексирование в ag71xx_slave_devs по номеру порта! не путать с битовой маской!
   ag71xx_slave_devs[port_num] = dev;
 	INIT_DELAYED_WORK(&ags->link_work, slave_link_function);
