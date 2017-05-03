@@ -32,6 +32,8 @@
 #include <linux/workqueue.h>
 
 #include <linux/bitops.h>
+#define BITM(_count)	(BIT(_count) - 1)
+#define BITS(_shift, _count)	(BITM(_count) << _shift)
 
 #include <asm/mach-ath79/ar71xx_regs.h>
 #include <asm/mach-ath79/ath79.h>
@@ -148,6 +150,8 @@ struct ag71xx_debug {
 };
 
 struct ag71xx {
+	int is_master; //must be a first var!
+	int has_switch;
 	void __iomem		*mac_base;
 
 	spinlock_t		lock;
@@ -181,6 +185,16 @@ struct ag71xx {
 #ifdef CONFIG_AG71XX_DEBUG_FS
 	struct ag71xx_debug	debug;
 #endif
+};
+
+struct ag71xx_slave {
+	int is_master; //must be a first var!
+	int port_num;
+	int port_mask;
+	struct net_device	*dev;
+	struct ag71xx *master_ag;
+	unsigned int link;
+	struct delayed_work	link_work;
 };
 
 extern struct ethtool_ops ag71xx_ethtool_ops;
@@ -459,6 +473,24 @@ static inline int ag71xx_has_ar8216(struct ag71xx *ag)
 }
 #endif
 
+#ifdef CONFIG_AG71XX_AR9344_SUPPORT
+void ag71xx_add_ar9344_header(struct sk_buff *skb, int port_mask);
+int ag71xx_remove_ar9344_header(struct sk_buff *skb, int pktlen, int *port_num);
+#else
+static inline void ag71xx_add_ar9344_header(struct ag71xx *ag,
+					   struct sk_buff *skb, int port_mask)
+{
+}
+
+static inline int ag71xx_remove_ar9344_header(struct ag71xx *ag,
+					      struct sk_buff *skb,
+					      int pktlen, int *port_num)
+{
+	return 0;
+}
+#endif
+
+
 #ifdef CONFIG_AG71XX_DEBUG_FS
 int ag71xx_debugfs_root_init(void);
 void ag71xx_debugfs_root_exit(void);
@@ -481,6 +513,11 @@ void ag71xx_ar7240_start(struct ag71xx *ag);
 void ag71xx_ar7240_stop(struct ag71xx *ag);
 int ag71xx_ar7240_init(struct ag71xx *ag);
 void ag71xx_ar7240_cleanup(struct ag71xx *ag);
+int ag71xx_ar7240_get_num_ports(struct ag71xx *ag);
+struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag);
+void ag71xx_ar7240_enable_port(struct ag71xx *ag, unsigned port);
+void ag71xx_ar7240_disable_port(struct ag71xx *ag, unsigned port);
+void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state);
 
 int ag71xx_mdio_mii_read(struct ag71xx_mdio *am, int addr, int reg);
 void ag71xx_mdio_mii_write(struct ag71xx_mdio *am, int addr, int reg, u16 val);

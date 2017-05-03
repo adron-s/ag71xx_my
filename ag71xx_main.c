@@ -11,6 +11,7 @@
  *  by the Free Software Foundation.
  */
 
+#include <linux/switch.h>
 #include "ag71xx.h"
 
 #if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
@@ -19,6 +20,29 @@ static inline void skb_free_frag(void *data)
 	put_page(virt_to_head_page(data));
 }
 #endif
+
+//для tx это номер порта
+#define AR7240_TX_HEADER_SOURCE_PORT_M BITM(3)
+//для rx это битовая маска!
+#define AR7240_RX_HEADER_SOURCE_PORT_M BITM(6)
+#define DEV_ADDR_ADD(dev_addr, _v){						\
+	int v = _v;																	\
+	unsigned char *p = &dev_addr[ETH_ALEN - 1];	\
+	while(p >= dev_addr){												\
+		unsigned char prev = (*p);								\
+		(*p)+= v;																	\
+		v = 1;																		\
+		if(prev > *p)															\
+			p--;																		\
+		else																			\
+			break;																	\
+	}																						\
+}
+
+struct net_device *ag71xx_slave_devs[AR7240_TX_HEADER_SOURCE_PORT_M + 1];
+#define ag71xx_slave_devs_count() 						\
+	(sizeof(ag71xx_slave_devs) / 								\
+	sizeof(ag71xx_slave_devs[0]))
 
 #define AG71XX_DEFAULT_MSG_ENABLE	\
 	(NETIF_MSG_DRV			\
@@ -783,8 +807,7 @@ static int ag71xx_fill_dma_desc(struct ag71xx_ring *ring, u32 addr, int len)
 	return ndesc;
 }
 
-static netdev_tx_t ag71xx_hard_start_xmit(struct sk_buff *skb,
-					  struct net_device *dev)
+static netdev_tx_t ag71xx_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 {
 	struct ag71xx *ag = netdev_priv(dev);
 	struct ag71xx_ring *ring = &ag->tx_ring;
@@ -821,6 +844,9 @@ static netdev_tx_t ag71xx_hard_start_xmit(struct sk_buff *skb,
 	netdev_sent_queue(dev, skb->len);
 
 	skb_tx_timestamp(skb);
+
+	skb->dev->stats.tx_bytes += skb->len;
+	skb->dev->stats.tx_packets ++;
 
 	desc->ctrl &= ~DESC_EMPTY;
 	ring->curr += n;
@@ -999,9 +1025,6 @@ static int ag71xx_tx_packets(struct ag71xx *ag, bool flush)
 
 	DBG("%s: %d packets sent out\n", ag->dev->name, sent);
 
-	ag->dev->stats.tx_bytes += bytes_compl;
-	ag->dev->stats.tx_packets += sent;
-
 	if (!sent)
 		return 0;
 
@@ -1025,6 +1048,8 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 	int ring_size = BIT(ring->order);
 	struct sk_buff_head queue;
 	struct sk_buff *skb;
+	int port_num = 0;
+	struct net_device *slave_dev;
 	int done = 0;
 
 	DBG("%s: rx packets, limit=%d, curr=%u, dirty=%u\n",
@@ -1054,9 +1079,6 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 		dma_unmap_single(&dev->dev, ring->buf[i].dma_addr,
 				 ag->rx_buf_size, DMA_FROM_DEVICE);
 
-		dev->stats.rx_packets++;
-		dev->stats.rx_bytes += pktlen;
-
 		skb = build_skb(ring->buf[i].rx_buf, ag71xx_buffer_size(ag));
 		if (!skb) {
 			skb_free_frag(ring->buf[i].rx_buf);
@@ -1068,6 +1090,30 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 
 		if (ag71xx_has_ar8216(ag))
 			err = ag71xx_remove_ar8216_header(ag, skb, pktlen);
+
+		if(likely(ag->has_switch)){
+			err = ag71xx_remove_ar9344_header(skb, pktlen, &port_num);
+			slave_dev = ag71xx_slave_devs[port_num &
+				AR7240_TX_HEADER_SOURCE_PORT_M]; //rx пакета это tx свитча к нам
+			  /*printk(KERN_DEBUG "%s x1: 0x%x -> 0x%lx, slave_dev = %s\n",
+					__func__, port_num & 0xFF,
+					port_num & AR7240_TX_HEADER_SOURCE_PORT_M,
+					slave_dev ? slave_dev->name : "NULL"); */
+			if(likely(slave_dev)){
+				DBG("%s: slave dev %s\n",
+						dev->name, slave_dev->name);
+				//крутнем статистику принятых пакетов на master интерфейсе
+				dev->stats.rx_packets++;
+				dev->stats.rx_bytes += pktlen;
+				//dev уже не тот что раньше! помни про это! внизу обращайся ~только~ к skb->dev !
+				dev = slave_dev;
+			}
+		}
+
+		/* а это уже статистика принятых пакетов на целевом slave интерфейсе
+			 если конечно слейвы для данного phy используются */
+		dev->stats.rx_packets++;
+		dev->stats.rx_bytes += pktlen;
 
 		if (err) {
 			dev->stats.rx_dropped++;
@@ -1088,7 +1134,7 @@ next:
 	ag71xx_ring_rx_refill(ag);
 
 	while ((skb = __skb_dequeue(&queue)) != NULL) {
-		skb->protocol = eth_type_trans(skb, dev);
+		skb->protocol = eth_type_trans(skb, skb->dev);
 		netif_receive_skb(skb);
 	}
 
@@ -1228,6 +1274,88 @@ static int ag71xx_change_mtu(struct net_device *dev, int new_mtu)
 	return 0;
 }
 
+static netdev_tx_t slave_dev_hard_start_xmit(struct sk_buff *skb,
+					  struct net_device *dev)
+{
+	int ret;
+	int len;
+  struct ag71xx_slave *ags = netdev_priv(dev);
+	struct net_device *master_dev = ags->master_ag->dev;
+	if(unlikely(skb_cloned(skb) || skb_shared(skb))){
+		struct sk_buff *old_skb = skb;
+		skb = skb_copy(old_skb, GFP_ATOMIC);
+		kfree_skb(old_skb);
+		if(!skb){
+			dev->stats.tx_dropped++;
+			return NET_XMIT_DROP;
+		}
+	}
+	ag71xx_add_ar9344_header(skb, ags->port_mask);
+	skb->dev = master_dev;
+	len = skb->len;
+	//вставляем нашу skb в очередь на передачу устройства master_dev
+	ret = dev_queue_xmit(skb);
+	if(likely(ret == NET_XMIT_SUCCESS)){
+		dev->stats.tx_bytes += len;
+		dev->stats.tx_packets++;
+	}else
+		dev->stats.tx_dropped++;
+	return ret;
+}
+
+static int slave_dev_open(struct net_device *dev)
+{
+	int ret = 0;
+  struct ag71xx_slave *ags = netdev_priv(dev);
+	struct net_device *master_dev = ags->master_ag->dev;
+	schedule_delayed_work(&ags->link_work, HZ / 10);
+	/* важно сначала поднять master интерфейс
+		 так как он проинитит свитч ! */
+	ret = dev_open(master_dev);
+	if(!ret){
+		ag71xx_ar7240_enable_port(ags->master_ag, ags->port_num);
+		netif_start_queue(dev);
+	}
+	return ret;
+}
+
+static int slave_dev_stop(struct net_device *dev)
+{
+  struct ag71xx_slave *ags = netdev_priv(dev);
+	cancel_delayed_work_sync(&ags->link_work);
+	netif_stop_queue(dev);
+	ag71xx_ar7240_disable_port(ags->master_ag, ags->port_num);
+	return 0;
+}
+
+static void slave_link_function(struct work_struct *work){
+	struct ag71xx_slave *ags = container_of(work, struct ag71xx_slave, link_work.work);
+	struct switch_port_link port_link;
+	struct switch_dev *swdev;
+	swdev = ag71xx_ar7240_get_swdev(ags->master_ag);
+	if(!swdev || !swdev->ops || !swdev->ops->get_port_link){
+		printk(KERN_ERR "BUG! %s: 0x%p, 0x%p, 0x%p\n",
+			__func__, swdev, swdev->ops, swdev->ops->get_port_link);
+		return;
+	}
+	memset(&port_link, '\0', sizeof(port_link));
+	if(!swdev->ops->get_port_link(swdev, ags->port_num, &port_link)){
+		if(port_link.link != ags->link){
+			ags->link = port_link.link;
+			if(!ags->link){ //if link is DOWN
+				netif_carrier_off(ags->dev);
+				if(netif_msg_link(ags->master_ag))
+					pr_info("%s: link down\n", ags->dev->name);
+			}else{ //if link is UP
+				netif_carrier_on(ags->dev);
+				if(netif_msg_link(ags->master_ag))
+					pr_info("%s: link up\n", ags->dev->name);
+			}
+		}
+	}
+	schedule_delayed_work(&ags->link_work, HZ / 2);
+}
+
 static const struct net_device_ops ag71xx_netdev_ops = {
 	.ndo_open		= ag71xx_open,
 	.ndo_stop		= ag71xx_stop,
@@ -1240,6 +1368,14 @@ static const struct net_device_ops ag71xx_netdev_ops = {
 #ifdef CONFIG_NET_POLL_CONTROLLER
 	.ndo_poll_controller	= ag71xx_netpoll,
 #endif
+};
+
+static const struct net_device_ops slave_dev_netdev_ops = {
+	.ndo_open		= slave_dev_open,
+	.ndo_stop		= slave_dev_stop,
+	.ndo_start_xmit		= slave_dev_hard_start_xmit,
+	.ndo_set_mac_address	= eth_mac_addr,
+	.ndo_validate_addr	= eth_validate_addr,
 };
 
 static const char *ag71xx_get_phy_if_mode_name(phy_interface_t mode)
@@ -1262,6 +1398,83 @@ static const char *ag71xx_get_phy_if_mode_name(phy_interface_t mode)
 	return "unknown";
 }
 
+static int create_slave_device(struct ag71xx *master_ag, int port_num){
+	struct platform_device *pdev = master_ag->pdev;
+	struct net_device *dev = NULL;
+	char dev_name[sizeof(dev->name)];
+	int err = 0;
+	struct ag71xx_slave *ags;
+	dev_hold(master_ag->dev);
+	if(port_num & ~AR7240_TX_HEADER_SOURCE_PORT_M){
+		printk(KERN_ERR "BUG: %s: Incorrect port_num %d\n", __func__, port_num);
+		err = -EINVAL;
+		goto err_out;
+	}
+
+	if(ag71xx_slave_devs[port_num]){
+		printk(KERN_ERR "BUG: %s: net_device(%s) for sw_port %d already exists",
+			__func__, ag71xx_slave_devs[port_num]->name, port_num);
+		err = -EINVAL;
+		goto err_out;
+	}
+
+	snprintf(dev_name, sizeof(dev_name), "%sp%d", master_ag->dev->name, port_num);
+	dev = alloc_netdev_mqs(sizeof(*ags), dev_name, NET_NAME_UNKNOWN,
+		ether_setup, 1, 1);
+
+	if (!dev) {
+		dev_err(&pdev->dev, "alloc_etherdev for sw_port %d failed\n", port_num);
+		err = -ENOMEM;
+		goto err_out;
+	}
+	ags = netdev_priv(dev);
+	ags->is_master = 0;
+	ags->port_num = port_num;
+	ags->port_mask = BIT(port_num);
+	ags->master_ag = master_ag;
+	/* в начале ставим статус линка NO LINK. если это не так то
+		 slave_link_function при своем следующем вызове его поправит.
+		 и netif_carrier_off(dev) правильно умеет отрабатывать установку
+		 несущей до вызова register_netdev! он проверяет что статус ==
+		 NETREG_UNINITIALIZED и не ренерирует событие об изменении статуса
+		 а просто тихонько правит нужный бит в dev->... */
+	ags->link = 0;
+	netif_carrier_off(dev);
+	ag71xx_ar7240_disable_port(master_ag, ags->port_num);
+
+	//dev->base_addr = (unsigned long)master_ag->mac_base + port_num;
+	dev->netdev_ops = &slave_dev_netdev_ops;
+	memcpy(dev->dev_addr, master_ag->dev->dev_addr, ETH_ALEN);
+	DEV_ADDR_ADD(dev->dev_addr, port_num - 1);
+	err = register_netdev(dev);
+	if (err) {
+		dev_err(&pdev->dev, "unable to register net device for sw_port %d\n", port_num);
+		goto err;
+	}
+	ags->dev = dev;
+	//индексирование в ag71xx_slave_devs по номеру порта! не путать с битовой маской!
+  ag71xx_slave_devs[port_num] = dev;
+	INIT_DELAYED_WORK(&ags->link_work, slave_link_function);
+  return 0;
+err:
+err_out:
+	dev_put(master_ag->dev);
+	if(dev)
+		free_netdev(dev);
+	return err;
+}
+
+static void destroy_slave_device(struct ag71xx *master_ag, int port_num){
+	struct net_device *dev = ag71xx_slave_devs[port_num];
+	if(dev){
+		struct ag71xx_slave *ags = netdev_priv(dev);
+		cancel_delayed_work_sync(&ags->link_work);
+		netif_tx_disable(dev);
+		unregister_netdev(dev);
+		dev_put(master_ag->dev);
+		free_netdev(dev);
+	}
+}
 
 static int ag71xx_probe(struct platform_device *pdev)
 {
@@ -1297,6 +1510,7 @@ static int ag71xx_probe(struct platform_device *pdev)
 	SET_NETDEV_DEV(dev, &pdev->dev);
 
 	ag = netdev_priv(dev);
+	ag->is_master = 1;
 	ag->pdev = pdev;
 	ag->dev = dev;
 	ag->msg_enable = netif_msg_init(ag71xx_msg_level,
@@ -1383,11 +1597,24 @@ static int ag71xx_probe(struct platform_device *pdev)
 		dev_err(&pdev->dev, "unable to register net device\n");
 		goto err_debugfs_exit;
 	}
-
 	pr_info("%s: Atheros AG71xx at 0x%08lx, irq %d, mode:%s\n",
 		dev->name, dev->base_addr, dev->irq,
 		ag71xx_get_phy_if_mode_name(pdata->phy_if_mode));
 
+	if(pdata->switch_data){
+		int a;
+		ag->has_switch = 1;
+		ag71xx_ar7240_set_phy_init_pdown(ag, 1);
+		memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
+		for(a = 1; a < ag71xx_ar7240_get_num_ports(ag); a++)
+  		create_slave_device(ag, a);
+		for(a = 0; a < ag71xx_slave_devs_count(); a++){
+			printk(KERN_DEBUG "sw port %d -> %s -> 0x%x\n", a,
+				ag71xx_slave_devs[a] ? ag71xx_slave_devs[a]->name : "EMPTY",
+				ag71xx_slave_devs[a] ? ((struct ag71xx_slave *)netdev_priv(
+				ag71xx_slave_devs[a]))->port_mask : -1);
+		}
+	}
 	return 0;
 
 err_debugfs_exit:
@@ -1413,8 +1640,10 @@ static int ag71xx_remove(struct platform_device *pdev)
 	struct net_device *dev = platform_get_drvdata(pdev);
 
 	if (dev) {
+		int a;
 		struct ag71xx *ag = netdev_priv(dev);
-
+		for(a = 1; a < ag71xx_slave_devs_count(); a++)
+  		destroy_slave_device(ag, a);
 		ag71xx_debugfs_exit(ag);
 		ag71xx_phy_disconnect(ag);
 		unregister_netdev(dev);

@@ -18,9 +18,6 @@
 #include <linux/switch.h>
 #include "ag71xx.h"
 
-#define BITM(_count)	(BIT(_count) - 1)
-#define BITS(_shift, _count)	(BITM(_count) << _shift)
-
 #define AR7240_REG_MASK_CTRL		0x00
 #define AR7240_MASK_CTRL_REVISION_M	BITM(8)
 #define AR7240_MASK_CTRL_VERSION_M	BITM(8)
@@ -292,6 +289,7 @@ struct ar7240sw {
 	struct mii_bus	*mii_bus;
 	struct ag71xx_switch_platform_data *swdata;
 	struct switch_dev swdev;
+	bool phy_init_pdown;
 	int num_ports;
 	u8 ver;
 	bool vlan;
@@ -390,7 +388,7 @@ static void __ar7240sw_reg_write(struct mii_bus *mii, u32 reg, u32 val)
 	local_irq_restore(flags);
 }
 
-static u32 ar7240sw_reg_read(struct mii_bus *mii, u32 reg_addr)
+u32 ar7240sw_reg_read(struct mii_bus *mii, u32 reg_addr)
 {
 	u32 ret;
 
@@ -401,12 +399,16 @@ static u32 ar7240sw_reg_read(struct mii_bus *mii, u32 reg_addr)
 	return ret;
 }
 
-static void ar7240sw_reg_write(struct mii_bus *mii, u32 reg_addr, u32 reg_val)
+EXPORT_SYMBOL_GPL(ar7240sw_reg_read);
+
+void ar7240sw_reg_write(struct mii_bus *mii, u32 reg_addr, u32 reg_val)
 {
 	mutex_lock(&reg_mutex);
 	__ar7240sw_reg_write(mii, reg_addr, reg_val);
 	mutex_unlock(&reg_mutex);
 }
+
+EXPORT_SYMBOL_GPL(ar7240sw_reg_write);
 
 static u32 ar7240sw_reg_rmw(struct mii_bus *mii, u32 reg, u32 mask, u32 val)
 {
@@ -565,10 +567,10 @@ static void ar7240sw_setup(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
 
-	/* Enable CPU port, and disable mirror port */
+	/* Enable CPU port, and set mirror port to 0(CPU port)*/
 	ar7240sw_reg_write(mii, AR7240_REG_CPU_PORT,
-			   AR7240_CPU_PORT_EN |
-			   (15 << AR7240_MIRROR_PORT_S));
+			   AR7240_CPU_PORT_EN);// |
+	//	   (15 << AR7240_MIRROR_PORT_S));
 
 	/* Setup TAG priority mapping */
 	ar7240sw_reg_write(mii, AR7240_REG_TAG_PRIORITY, 0xfa50);
@@ -668,8 +670,12 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		ar7240sw_phy_write(mii, i, MII_ADVERTISE,
 				   ADVERTISE_ALL | ADVERTISE_PAUSE_CAP |
 				   ADVERTISE_PAUSE_ASYM);
-		ar7240sw_phy_write(mii, i, MII_BMCR,
-				   BMCR_RESET | BMCR_ANENABLE);
+		if(!as->phy_init_pdown)
+			ar7240sw_phy_write(mii, i, MII_BMCR,
+					   BMCR_RESET | BMCR_ANENABLE);
+		else
+			ar7240sw_phy_write(mii, i, MII_BMCR,
+						 BMCR_PDOWN);
 	}
 	ret = ar7240sw_phy_poll_reset(mii);
 	if (ret)
@@ -696,10 +702,15 @@ static void ar7240sw_setup_port(struct ar7240sw *as, unsigned port, u8 portmask)
 				   AR7240_PORT_STATUS_TXMAC |
 				   AR7240_PORT_STATUS_RXMAC |
 				   AR7240_PORT_STATUS_DUPLEX);
+		ctrl |= AR7240_PORT_CTRL_HEADER;
 	} else {
 		ar7240sw_reg_write(mii, AR7240_REG_PORT_STATUS(port),
 				   AR7240_PORT_STATUS_LINK_AUTO);
 	}
+	//Disable learning for all ports!
+	ctrl &= ~AR7240_PORT_CTRL_LEARN;
+	ctrl &= ~BIT(5); //Disarm LOCK_DROP_EN
+	ctrl |= BIT(6); //Arm PORT_LOCK_EN
 
 	/* Set the default VID for this port */
 	if (as->vlan) {
@@ -944,6 +955,12 @@ ar7240_hw_apply(struct switch_dev *dev)
 	for (i = 0; i < as->swdev.ports; i++)
 		ar7240sw_setup_port(as, i, portmask[i]);
 
+	//Flush all ATU entries
+	{
+		struct mii_bus *mii = as->mii_bus;
+		ar7240sw_reg_write(mii, AR7240_REG_ATU, 0x1);
+	}
+
 	return 0;
 }
 
@@ -955,7 +972,7 @@ ar7240_reset_switch(struct switch_dev *dev)
 	return 0;
 }
 
-static int
+int
 ar7240_get_port_link(struct switch_dev *dev, int port,
 		     struct switch_port_link *link)
 {
@@ -1227,3 +1244,67 @@ void ag71xx_ar7240_cleanup(struct ag71xx *ag)
 	kfree(as);
 	ag->phy_priv = NULL;
 }
+
+int ag71xx_ar7240_get_num_ports(struct ag71xx *ag)
+{
+	struct ar7240sw *as = ag->phy_priv;
+	if (!as)
+		return 0;
+	return as->swdev.ports;
+}
+
+struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag)
+{
+	struct ar7240sw *as = ag->phy_priv;
+	if(!ag->has_switch || !as)
+		return NULL;
+	return &as->swdev;
+}
+
+static void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
+{
+	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ag);
+	if(swdev){
+		struct ar7240sw *as = sw_to_ar7240(swdev);
+		u32 ctrl = ar7240sw_reg_read(as->mii_bus, AR7240_REG_PORT_CTRL(port));
+		u32 bmcr = ar7240sw_phy_read(as->mii_bus, port - 1, MII_BMCR);
+		//printk(KERN_DEBUG "%s(%u, %d): bmcr do = 0x%x\n", __func__, port, state, bmcr);
+		ctrl &= ~AR7240_PORT_CTRL_STATE_M;
+		if(state){
+			ctrl |= AR7240_PORT_CTRL_STATE_FORWARD;
+			bmcr &= ~BMCR_PDOWN; //включаем питание на трансивер
+			//на всякий случай еще рестартанем трансивер и автонеготинацию
+			bmcr |= BMCR_RESET | BMCR_ANENABLE;
+		}
+		else{
+			//отрубаем свитч порт(запрет всего tx/rx трафика)
+			ctrl |= AR7240_PORT_CTRL_STATE_DISABLED;
+			//отрубаем трансивер
+			bmcr |= BMCR_PDOWN;
+		}
+		ar7240sw_reg_write(as->mii_bus, AR7240_REG_PORT_CTRL(port), ctrl);
+		//printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
+		ar7240sw_phy_write(as->mii_bus, port - 1, MII_BMCR, bmcr);
+	}
+}
+
+void ag71xx_ar7240_disable_port(struct ag71xx *ag, unsigned port)
+{
+	ag71xx_ar7240_set_port_state(ag, port, 0);
+}
+
+void ag71xx_ar7240_enable_port(struct ag71xx *ag, unsigned port)
+{
+	ag71xx_ar7240_set_port_state(ag, port, 1);
+}
+
+void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state)
+{
+	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ag);
+	if(swdev){
+		struct ar7240sw *as = sw_to_ar7240(swdev);
+		as->phy_init_pdown = state;
+	}
+}
+
+
