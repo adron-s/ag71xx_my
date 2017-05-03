@@ -1,0 +1,4 @@
+#!/bin/bash
+
+rmmod test_m
+#dmesg -c > /dev/null

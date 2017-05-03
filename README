@@ -1,0 +1,4 @@
+My version of ag71xx Atheros ethernet driver
+
+This version can separately work by each ar7240 switch
+port as with an independent network interface!
