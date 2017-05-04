@@ -191,6 +191,7 @@ struct ag71xx_slave {
 	int is_master; //must be a first var!
 	int port_num;
 	int port_mask;
+	u32			msg_enable;
 	spinlock_t		lock;
 	struct net_device	*dev;
 	struct ag71xx *master_ag;

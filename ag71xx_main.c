@@ -1351,10 +1351,21 @@ static void slave_link_function(struct work_struct *work){
 		if(port_link.link != ags->link){
 			ags->link = port_link.link;
 			if(!ags->link){ //if link is DOWN
+				ags->link = 0;
+				ags->speed = 0;
+				ags->duplex = 0;
 				netif_carrier_off(ags->dev);
+				if(ags->phy_dev){
+					phy_stop(ags->phy_dev);
+					ags->phy_dev->speed = 0;
+					ags->phy_dev->duplex = -1;
+					ags->phy_dev->state = PHY_DOWN;
+				}
 				if(netif_msg_link(ags->master_ag))
 					pr_info("%s: link down\n", ags->dev->name);
 			}else{ //if link is UP
+				ags->phy_dev->state = PHY_UP;
+				phy_start(ags->phy_dev);
 				netif_carrier_on(ags->dev);
 				if(netif_msg_link(ags->master_ag))
 					pr_info("%s: link up\n", ags->dev->name);
@@ -1418,6 +1429,18 @@ static int slave_ethtool_get_settings(struct net_device *dev,
 	return phy_ethtool_gset(phydev, cmd);
 }
 
+static int slave_ethtool_set_settings(struct net_device *dev,
+				       struct ethtool_cmd *cmd)
+{
+	struct ag71xx_slave *ags = netdev_priv(dev);
+	struct phy_device *phydev = ags->phy_dev;
+
+	if (!phydev)
+		return -ENODEV;
+
+	return phy_ethtool_sset(phydev, cmd);
+}
+
 static void slave_ethtool_get_drvinfo(struct net_device *dev,
 						struct ethtool_drvinfo *info)
 {
@@ -1428,13 +1451,26 @@ static void slave_ethtool_get_drvinfo(struct net_device *dev,
 }
 
 
+static u32 slave_ethtool_get_msglevel(struct net_device *dev)
+{
+	struct ag71xx_slave *ags = netdev_priv(dev);
+	return ags->msg_enable;
+}
+
+static void slave_ethtool_set_msglevel(struct net_device *dev, u32 msg_level)
+{
+	struct ag71xx_slave *ags = netdev_priv(dev);
+	ags->msg_enable = msg_level;
+}
+
 struct ethtool_ops slave_ethtool_ops = {
-//	.set_settings	= ag71xx_ethtool_set_settings,
+	.set_settings	= slave_ethtool_set_settings,
 	.get_settings	= slave_ethtool_get_settings,
 	.get_drvinfo	= slave_ethtool_get_drvinfo,
 	.get_link	= ethtool_op_get_link,
+	.get_msglevel	= slave_ethtool_get_msglevel,
+	.set_msglevel	= slave_ethtool_set_msglevel,
 };
-
 
 static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	struct platform_device *pdev = master_ag->pdev;
@@ -1471,6 +1507,7 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	ags->port_num = port_num;
 	ags->port_mask = BIT(port_num);
 	ags->master_ag = master_ag;
+	ags->msg_enable = master_ag->msg_enable;
 	/* в начале ставим статус линка NO LINK. если это не так то
 		 slave_link_function при своем следующем вызове его поправит.
 		 и netif_carrier_off(dev) правильно умеет отрабатывать установку
@@ -1482,7 +1519,6 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	ags->duplex = 0;
 	netif_carrier_off(dev);
 	ag71xx_ar7240_set_port_state(master_ag, ags->port_num, 0);
-
 	//dev->base_addr = (unsigned long)master_ag->mac_base + port_num;
 	dev->netdev_ops = &slave_dev_netdev_ops;
 	dev->ethtool_ops = &slave_ethtool_ops;

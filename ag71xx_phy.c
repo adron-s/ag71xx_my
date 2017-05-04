@@ -250,10 +250,11 @@ static struct mii_bus *dev_to_mii_bus(struct device *dev)
 void ag71xx_phy_connect_for_slaves(struct ag71xx_slave *ags){
 	struct phy_device *phydev = ag71xx_ar7240_get_phydev_for_slave(ags);
 	if(phydev){
-		printk(KERN_DEBUG "%s: PHY found at %s, uid=%08x, irq=0x%x\n",
+		printk(KERN_DEBUG "%s: PHY found at %s [uid=%08x, irq=0x%x, driver=%s]\n",
 					 ags->dev->name,
 					 dev_name(&phydev->dev),
-		phydev->phy_id, phydev->irq);
+					 phydev->phy_id, phydev->irq, phydev->drv ?
+    			 phydev->drv->name : "NULL");
 		ags->phy_dev = phy_connect(ags->dev, dev_name(&phydev->dev),
 			  &ag71xx_phy_link_adjust_for_slave,
 			  PHY_INTERFACE_MODE_MII);
