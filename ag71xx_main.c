@@ -1356,7 +1356,7 @@ static void slave_link_function(struct work_struct *work){
 				ags->duplex = 0;
 				netif_carrier_off(ags->dev);
 				if(ags->phy_dev){
-					phy_stop(ags->phy_dev);
+					//phy_stop(ags->phy_dev);
 					ags->phy_dev->speed = 0;
 					ags->phy_dev->duplex = -1;
 					ags->phy_dev->state = PHY_DOWN;
@@ -1364,8 +1364,9 @@ static void slave_link_function(struct work_struct *work){
 				if(netif_msg_link(ags->master_ag))
 					pr_info("%s: link down\n", ags->dev->name);
 			}else{ //if link is UP
-				ags->phy_dev->state = PHY_UP;
-				phy_start(ags->phy_dev);
+				if(ags->phy_dev)
+					ags->phy_dev->state = PHY_UP;
+				//phy_start(ags->phy_dev);
 				netif_carrier_on(ags->dev);
 				if(netif_msg_link(ags->master_ag))
 					pr_info("%s: link up\n", ags->dev->name);
@@ -1521,7 +1522,7 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	ag71xx_ar7240_set_port_state(master_ag, ags->port_num, 0);
 	//dev->base_addr = (unsigned long)master_ag->mac_base + port_num;
 	dev->netdev_ops = &slave_dev_netdev_ops;
-	dev->ethtool_ops = &slave_ethtool_ops;
+	//dev->ethtool_ops = &slave_ethtool_ops; //!!!
 	memcpy(dev->dev_addr, master_ag->dev->dev_addr, ETH_ALEN);
 	DEV_ADDR_ADD(dev->dev_addr, port_num - 1);
 	err = register_netdev(dev);
@@ -1530,7 +1531,7 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 		goto err;
 	}
 	ags->dev = dev;
-  ag71xx_phy_connect_for_slaves(ags);
+  //ag71xx_phy_connect_for_slaves(ags); //!!
 	//индексирование в ag71xx_slave_devs по номеру порта! не путать с битовой маской!
   ag71xx_slave_devs[port_num] = dev;
 	INIT_DELAYED_WORK(&ags->link_work, slave_link_function);

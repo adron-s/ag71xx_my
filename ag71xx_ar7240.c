@@ -1013,6 +1013,50 @@ ar7240_get_port_link(struct switch_dev *dev, int port,
 	return 0;
 }
 
+static int ar7240_set_port_link(struct switch_dev *dev, int port,
+			     struct switch_port_link *link)
+{
+	struct ar7240sw *as = sw_to_ar7240(dev);
+	struct mii_bus *mii = as->mii_bus;
+	int phy_addr = port - 1;
+
+	if (port == dev->cpu_port)
+		return -EINVAL;
+
+	if (link->speed == SWITCH_PORT_SPEED_1000 && !link->duplex)
+		return -EINVAL;
+
+	printk(KERN_DEBUG "%s: port = %u speed = %u, duplex = %u\n",
+				 __func__, port, link->speed, link->duplex);
+
+	if (link->aneg){
+		ar7240sw_phy_write(mii, phy_addr, MII_BMCR, 0x0000);
+		ar7240sw_phy_write(mii, phy_addr, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
+	} else {
+		u16 bmcr = 0;
+
+		if (link->duplex)
+			bmcr |= BMCR_FULLDPLX;
+
+		switch (link->speed) {
+		case SWITCH_PORT_SPEED_10:
+			break;
+		case SWITCH_PORT_SPEED_100:
+			bmcr |= BMCR_SPEED100;
+			break;
+		case SWITCH_PORT_SPEED_1000:
+			bmcr |= BMCR_SPEED1000;
+			break;
+		default:
+			return -ENOTSUPP;
+		}
+
+		ar7240sw_phy_write(mii, phy_addr, MII_BMCR, bmcr);
+	}
+
+	return 0;
+}
+
 static int
 ar7240_get_port_stats(struct switch_dev *dev, int port,
 		      struct switch_port_stats *stats)
@@ -1077,6 +1121,7 @@ static const struct switch_dev_ops ar7240_ops = {
 	.apply_config = ar7240_hw_apply,
 	.reset_switch = ar7240_reset_switch,
 	.get_port_link = ar7240_get_port_link,
+	.set_port_link = ar7240_set_port_link,
 	.get_port_stats = ar7240_get_port_stats,
 };
 
