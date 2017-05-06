@@ -1316,8 +1316,6 @@ static int slave_dev_open(struct net_device *dev)
 	ret = dev_open(master_dev);
 	if(!ret){
 		ag71xx_ar7240_set_port_state(ags->master_ag, ags->port_num, 1);
-		if(ags->phy_dev)
-			phy_start(ags->phy_dev);
 		netif_start_queue(dev);
 	}
 	return ret;
@@ -1329,8 +1327,6 @@ static int slave_dev_stop(struct net_device *dev)
 	cancel_delayed_work_sync(&ags->link_work);
 	netif_stop_queue(dev);
 	ag71xx_ar7240_set_port_state(ags->master_ag, ags->port_num, 0);
-	if(ags->phy_dev)
-		phy_stop(ags->phy_dev);
 	return 0;
 }
 
@@ -1351,22 +1347,10 @@ static void slave_link_function(struct work_struct *work){
 		if(port_link.link != ags->link){
 			ags->link = port_link.link;
 			if(!ags->link){ //if link is DOWN
-				ags->link = 0;
-				ags->speed = 0;
-				ags->duplex = 0;
 				netif_carrier_off(ags->dev);
-				if(ags->phy_dev){
-					//phy_stop(ags->phy_dev);
-					ags->phy_dev->speed = 0;
-					ags->phy_dev->duplex = -1;
-					ags->phy_dev->state = PHY_DOWN;
-				}
 				if(netif_msg_link(ags->master_ag))
 					pr_info("%s: link down\n", ags->dev->name);
 			}else{ //if link is UP
-				if(ags->phy_dev)
-					ags->phy_dev->state = PHY_UP;
-				//phy_start(ags->phy_dev);
 				netif_carrier_on(ags->dev);
 				if(netif_msg_link(ags->master_ag))
 					pr_info("%s: link up\n", ags->dev->name);
@@ -1418,61 +1402,6 @@ static const char *ag71xx_get_phy_if_mode_name(phy_interface_t mode)
 	return "unknown";
 }
 
-static int slave_ethtool_get_settings(struct net_device *dev,
-				       struct ethtool_cmd *cmd)
-{
-	struct ag71xx_slave *ags = netdev_priv(dev);
-	struct phy_device *phydev = ags->phy_dev;
-
-	if (!phydev)
-		return -ENODEV;
-
-	return phy_ethtool_gset(phydev, cmd);
-}
-
-static int slave_ethtool_set_settings(struct net_device *dev,
-				       struct ethtool_cmd *cmd)
-{
-	struct ag71xx_slave *ags = netdev_priv(dev);
-	struct phy_device *phydev = ags->phy_dev;
-
-	if (!phydev)
-		return -ENODEV;
-
-	return phy_ethtool_sset(phydev, cmd);
-}
-
-static void slave_ethtool_get_drvinfo(struct net_device *dev,
-						struct ethtool_drvinfo *info)
-{
-	struct ag71xx_slave *ags = netdev_priv(dev);
-	strcpy(info->driver, ags->master_ag->pdev->dev.driver->name);
-	strcpy(info->version, AG71XX_DRV_VERSION);
-	strcpy(info->bus_info, dev_name(&ags->master_ag->pdev->dev));
-}
-
-
-static u32 slave_ethtool_get_msglevel(struct net_device *dev)
-{
-	struct ag71xx_slave *ags = netdev_priv(dev);
-	return ags->msg_enable;
-}
-
-static void slave_ethtool_set_msglevel(struct net_device *dev, u32 msg_level)
-{
-	struct ag71xx_slave *ags = netdev_priv(dev);
-	ags->msg_enable = msg_level;
-}
-
-struct ethtool_ops slave_ethtool_ops = {
-	.set_settings	= slave_ethtool_set_settings,
-	.get_settings	= slave_ethtool_get_settings,
-	.get_drvinfo	= slave_ethtool_get_drvinfo,
-	.get_link	= ethtool_op_get_link,
-	.get_msglevel	= slave_ethtool_get_msglevel,
-	.set_msglevel	= slave_ethtool_set_msglevel,
-};
-
 static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	struct platform_device *pdev = master_ag->pdev;
 	struct net_device *dev = NULL;
@@ -1508,7 +1437,6 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	ags->port_num = port_num;
 	ags->port_mask = BIT(port_num);
 	ags->master_ag = master_ag;
-	ags->msg_enable = master_ag->msg_enable;
 	/* в начале ставим статус линка NO LINK. если это не так то
 		 slave_link_function при своем следующем вызове его поправит.
 		 и netif_carrier_off(dev) правильно умеет отрабатывать установку
@@ -1522,7 +1450,6 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	ag71xx_ar7240_set_port_state(master_ag, ags->port_num, 0);
 	//dev->base_addr = (unsigned long)master_ag->mac_base + port_num;
 	dev->netdev_ops = &slave_dev_netdev_ops;
-	//dev->ethtool_ops = &slave_ethtool_ops; //!!!
 	memcpy(dev->dev_addr, master_ag->dev->dev_addr, ETH_ALEN);
 	DEV_ADDR_ADD(dev->dev_addr, port_num - 1);
 	err = register_netdev(dev);
@@ -1531,7 +1458,6 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 		goto err;
 	}
 	ags->dev = dev;
-  //ag71xx_phy_connect_for_slaves(ags); //!!
 	//индексирование в ag71xx_slave_devs по номеру порта! не путать с битовой маской!
   ag71xx_slave_devs[port_num] = dev;
 	INIT_DELAYED_WORK(&ags->link_work, slave_link_function);

@@ -42,35 +42,6 @@ static void ag71xx_phy_link_adjust(struct net_device *dev)
 	spin_unlock_irqrestore(&ag->lock, flags);
 }
 
-static void ag71xx_phy_link_adjust_for_slave(struct net_device *dev)
-{
-	struct ag71xx_slave *ags = netdev_priv(dev);
-	struct phy_device *phydev = ags->phy_dev;
-	unsigned long flags;
-	int status_change = 0;
-
-	spin_lock_irqsave(&ags->lock, flags);
-
-	if (phydev->link) {
-		if (ags->duplex != phydev->duplex
-		    || ags->speed != phydev->speed) {
-			status_change = 1;
-		}
-	}
-
-	if (phydev->link != ags->link)
-		status_change = 1;
-
-	ags->link = phydev->link;
-	ags->duplex = phydev->duplex;
-	ags->speed = phydev->speed;
-
-	//if (status_change)
-		//ag71xx_link_adjust(ags);
-
-	spin_unlock_irqrestore(&ags->lock, flags);
-}
-
 void ag71xx_phy_set_phy_state(struct ag71xx *ag, int state)
 {
 	u32 bmcr = 0;
@@ -245,30 +216,6 @@ static struct mii_bus *dev_to_mii_bus(struct device *dev)
 	}
 
 	return NULL;
-}
-
-void ag71xx_phy_connect_for_slaves(struct ag71xx_slave *ags){
-	struct phy_device *phydev = ag71xx_ar7240_get_phydev_for_slave(ags);
-	if(phydev){
-		printk(KERN_DEBUG "%s: PHY found at %s [uid=%08x, irq=0x%x, driver=%s]\n",
-					 ags->dev->name,
-					 dev_name(&phydev->dev),
-					 phydev->phy_id, phydev->irq, phydev->drv ?
-    			 phydev->drv->name : "NULL");
-		ags->phy_dev = phy_connect(ags->dev, dev_name(&phydev->dev),
-			  &ag71xx_phy_link_adjust_for_slave,
-			  PHY_INTERFACE_MODE_MII);
-
-		if (IS_ERR(ags->phy_dev)){
-			printk(KERN_ERR "%s: could not connect to PHY\n",
-					 ags->dev->name);
-			return;
-		}
-	 	phydev->supported &= PHY_BASIC_FEATURES;
-		phydev->advertising = phydev->supported;
-		/* printk(KERN_DEBUG "%s:connected to PHY at %s [uid=%08x, driver=%s]\n",
-					 ags->dev->name, dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name); */
-	}
 }
 
 int ag71xx_phy_connect(struct ag71xx *ag)
