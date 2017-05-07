@@ -484,14 +484,13 @@ static inline int ag71xx_has_ar8216(struct ag71xx *ag)
 void ag71xx_add_ar9344_header(struct sk_buff *skb, int port_mask);
 int ag71xx_remove_ar9344_header(struct sk_buff *skb, int pktlen, int *port_num);
 #else
-static inline void ag71xx_add_ar9344_header(struct ag71xx *ag,
-					   struct sk_buff *skb, int port_mask)
+static inline void ag71xx_add_ar9344_header(struct sk_buff *skb,
+									 int port_mask){
 {
 }
 
-static inline int ag71xx_remove_ar9344_header(struct ag71xx *ag,
-					      struct sk_buff *skb,
-					      int pktlen, int *port_num)
+static inline int ag71xx_remove_ar9344_header(struct sk_buff *skb,
+									int pktlen, int *port_num)
 {
 	return 0;
 }
