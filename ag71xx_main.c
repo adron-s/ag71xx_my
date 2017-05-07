@@ -1434,6 +1434,7 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 		goto err_out;
 	}
 	ags = netdev_priv(dev);
+	memset(ags, 0x0, sizeof(*ags));
 	spin_lock_init(&ags->lock);
 	ags->is_master = 0;
 	ags->port_num = port_num;
@@ -1475,6 +1476,8 @@ err_out:
 struct ag71xx_slave *get_slave_ags_by_port_num(int port_num){
 	if(port_num < 0 || port_num >= ag71xx_slave_devs_count())
 		return NULL;
+	if(!ag71xx_slave_devs[port_num])
+		return NULL;
 	return netdev_priv(ag71xx_slave_devs[port_num]);
 }
 
@@ -1497,6 +1500,8 @@ static int ag71xx_probe(struct platform_device *pdev)
 	struct ag71xx *ag;
 	struct ag71xx_platform_data *pdata;
 	int tx_size, err;
+
+	memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
 
 	pdata = pdev->dev.platform_data;
 	if (!pdata) {
@@ -1619,7 +1624,6 @@ static int ag71xx_probe(struct platform_device *pdev)
 		int a;
 		ag->has_switch = 1;
 		ag71xx_ar7240_set_phy_init_pdown(ag, 1);
-		memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
 		for(a = 1; a < ag71xx_ar7240_get_num_ports(ag); a++)
   		create_slave_device(ag, a);
 		for(a = 0; a < ag71xx_slave_devs_count(); a++){

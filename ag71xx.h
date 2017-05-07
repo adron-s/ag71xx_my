@@ -198,6 +198,10 @@ struct ag71xx_slave {
 	unsigned int speed;
 	int duplex;
 	bool aneg;
+	unsigned int adj_speed;
+	int adj_duplex;
+	bool adj_aneg;
+	bool need_adjust;
 	struct delayed_work	link_work;
 };
 
