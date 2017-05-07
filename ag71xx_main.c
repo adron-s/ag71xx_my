@@ -1344,6 +1344,7 @@ static void slave_link_function(struct work_struct *work){
 	if(!swdev->ops->get_port_link(swdev, ags->port_num, &port_link)){
 		ags->speed = port_link.speed;
 		ags->duplex = port_link.duplex;
+		ags->aneg = port_link.aneg;
 		if(port_link.link != ags->link){
 			ags->link = port_link.link;
 			if(!ags->link){ //if link is DOWN
@@ -1353,7 +1354,8 @@ static void slave_link_function(struct work_struct *work){
 			}else{ //if link is UP
 				netif_carrier_on(ags->dev);
 				if(netif_msg_link(ags->master_ag))
-					pr_info("%s: link up\n", ags->dev->name);
+					pr_info("%s: link up(%d, %d, %d)\n", ags->dev->name,
+						port_link.speed, port_link.duplex, port_link.aneg);
 			}
 		}
 	}
@@ -1468,6 +1470,12 @@ err_out:
 	if(dev)
 		free_netdev(dev);
 	return err;
+}
+
+struct ag71xx_slave *get_slave_ags_by_port_num(int port_num){
+	if(port_num < 0 || port_num >= ag71xx_slave_devs_count())
+		return NULL;
+	return netdev_priv(ag71xx_slave_devs[port_num]);
 }
 
 static void destroy_slave_device(struct ag71xx *master_ag, int port_num){

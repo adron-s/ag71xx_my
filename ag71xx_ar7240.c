@@ -653,6 +653,8 @@ static int ar7240sw_reset(struct ar7240sw *as)
 	int ret;
 	int i;
 
+	//printk(KERN_DEBUG "%s\n", __func__);
+
 	/* Set all ports to disabled state. */
 	for (i = 0; i < AR7240_NUM_PORTS; i++)
 		ar7240sw_disable_port(as, i);
@@ -675,9 +677,9 @@ static int ar7240sw_reset(struct ar7240sw *as)
 		if(!as->phy_init_pdown)
 			ar7240sw_phy_write(mii, i, MII_BMCR,
 					   BMCR_RESET | BMCR_ANENABLE);
-		else
+		else /* ресет в этом случае должна сделать ag71xx_ar7240_set_port_state */
 			ar7240sw_phy_write(mii, i, MII_BMCR,
-						 BMCR_PDOWN);
+						 BMCR_PDOWN | BMCR_ANENABLE);
 	}
 	ret = ar7240sw_phy_poll_reset(mii);
 	if (ret)
@@ -1014,47 +1016,71 @@ ar7240_get_port_link(struct switch_dev *dev, int port,
 }
 
 static int ar7240_set_port_link(struct switch_dev *dev, int port,
-			     struct switch_port_link *link)
+			     struct switch_port_link *port_link)
 {
 	struct ar7240sw *as = sw_to_ar7240(dev);
 	struct mii_bus *mii = as->mii_bus;
 	int phy_addr = port - 1;
+  struct ag71xx_slave *ags = get_slave_ags_by_port_num(port);
+	int ret = 0;
+	u16 bmcr = 0;
+	u32 aneg_adv = 0;
+
+	if(!ags)
+		return -EINVAL;
 
 	if (port == dev->cpu_port)
 		return -EINVAL;
 
-	if (link->speed == SWITCH_PORT_SPEED_1000 && !link->duplex)
-		return -EINVAL;
+	cancel_delayed_work_sync(&ags->link_work);
 
-	printk(KERN_DEBUG "%s: port = %u speed = %u, duplex = %u\n",
-				 __func__, port, link->speed, link->duplex);
+	printk(KERN_DEBUG "%s/%s: port = %u speed = %u, duplex = %u, aneg = %u\n",
+				 __func__, ags->dev->name, port, port_link->speed,
+				 port_link->duplex, port_link->aneg);
 
-	if (link->aneg){
-		ar7240sw_phy_write(mii, phy_addr, MII_BMCR, 0x0000);
-		ar7240sw_phy_write(mii, phy_addr, MII_BMCR, BMCR_ANENABLE | BMCR_ANRESTART);
-	} else {
-		u16 bmcr = 0;
+	ags->speed = port_link->speed;
+	ags->duplex = port_link->duplex;
+	ags->aneg = port_link->aneg;
 
-		if (link->duplex)
-			bmcr |= BMCR_FULLDPLX;
+	/*printk(KERN_DEBUG "%s/%s: MII_BMCR = 0x%x\n",
+		__func__, ags->dev->name, ar7240sw_phy_read(mii, phy_addr, MII_BMCR));
+	printk(KERN_DEBUG "%s/%s: MII_ADVERTISE = 0x%x\n",
+		__func__, ags->dev->name, ar7240sw_phy_read(mii, phy_addr, MII_ADVERTISE)); */
 
-		switch (link->speed) {
-		case SWITCH_PORT_SPEED_10:
-			break;
-		case SWITCH_PORT_SPEED_100:
-			bmcr |= BMCR_SPEED100;
-			break;
-		case SWITCH_PORT_SPEED_1000:
-			bmcr |= BMCR_SPEED1000;
-			break;
-		default:
-			return -ENOTSUPP;
-		}
-
-		ar7240sw_phy_write(mii, phy_addr, MII_BMCR, bmcr);
+	//режим битого порта
+	if(port_link->speed == SWITCH_PORT_SPEED_1000 && !port_link->duplex){
+		port_link->speed = SWITCH_PORT_SPEED_10;
+		aneg_adv = ar7240sw_phy_read(mii, phy_addr, MII_ADVERTISE);
+		//запрет 10half, 100half/full. разрешаем только 10full
+		aneg_adv &= ~(ADVERTISE_10HALF | ADVERTISE_100HALF | ADVERTISE_100FULL);
+		aneg_adv |= ADVERTISE_10FULL;
+		printk(KERN_INFO "%s/%s: BAD port mode activated!\n",
+					 __func__, ags->dev->name);
 	}
 
-	return 0;
+	ar7240sw_phy_write(mii, phy_addr, MII_BMCR, 0x0000);
+	if(port_link->aneg){
+		bmcr = BMCR_ANENABLE | BMCR_ANRESTART;
+	}else{
+		if(port_link->duplex)
+			bmcr |= BMCR_FULLDPLX;
+		switch(port_link->speed){
+			case SWITCH_PORT_SPEED_10:
+				break;
+			case SWITCH_PORT_SPEED_100:
+				bmcr |= BMCR_SPEED100;
+				break;
+			default:
+				ret = -ENOTSUPP;
+				goto end;
+		}
+	}
+	if(aneg_adv)
+		ar7240sw_phy_write(mii, phy_addr, MII_ADVERTISE, aneg_adv);
+	ar7240sw_phy_write(mii, phy_addr, MII_BMCR, bmcr | BMCR_RESET);
+end:
+	schedule_delayed_work(&ags->link_work, HZ / 10);
+	return ret;
 }
 
 static int
@@ -1325,13 +1351,12 @@ void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
 		struct ar7240sw *as = sw_to_ar7240(swdev);
 		u32 ctrl = ar7240sw_reg_read(as->mii_bus, AR7240_REG_PORT_CTRL(port));
 		u32 bmcr = ar7240sw_phy_read(as->mii_bus, port - 1, MII_BMCR);
-		//printk(KERN_DEBUG "%s(%u, %d): bmcr do = 0x%x\n", __func__, port, state, bmcr);
+		printk(KERN_DEBUG "%s(%u, %d): bmcr do = 0x%x\n", __func__, port, state, bmcr);
 		ctrl &= ~AR7240_PORT_CTRL_STATE_M;
 		if(state){
 			ctrl |= AR7240_PORT_CTRL_STATE_FORWARD;
 			bmcr &= ~BMCR_PDOWN; //включаем питание на трансивер
-			//на всякий случай еще рестартанем трансивер и автонеготинацию
-			bmcr |= BMCR_RESET | BMCR_ANENABLE;
+			bmcr |= BMCR_RESET;
 		}
 		else{
 			//отрубаем свитч порт(запрет всего tx/rx трафика)
