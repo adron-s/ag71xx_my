@@ -1375,14 +1375,39 @@ struct phy_device *ag71xx_ar7240_get_phydev_for_slave(struct ag71xx_slave *ags){
 	return NULL;
 }
 
+int ag71xx_ar7240_get_sw_version(struct ag71xx *ag){
+	u32 ctrl;
+	if(ag->mii_bus){
+		ctrl = ar7240sw_reg_read(ag->mii_bus, AR7240_REG_MASK_CTRL);
+		return (ctrl >> AR7240_MASK_CTRL_VERSION_S) &
+		 				AR7240_MASK_CTRL_VERSION_M;
+	}
+	return -1;
+}
+
+int ag71xx_ar7240_cook_ags_depending_on_the_sw_ver(
+		 struct ag71xx_slave *ags, int sw_ver){
+	if(sw_ver == AR7240_MASK_CTRL_VERSION_AR7240){
+		ags->ath_hdr_port_byte = 0x70 + ags->port_num;
+		ags->ag71xx_add_atheros_header = ag71xx_add_ar7240_header;
+		ags->master_ag->ag71xx_remove_atheros_header = ag71xx_remove_ar7240_header;
+		return 0;
+	}
+	if(sw_ver == AR7240_MASK_CTRL_VERSION_AR934X){
+		ags->ath_hdr_port_byte = 0x80 + BIT(ags->port_num);
+		ags->ag71xx_add_atheros_header = ag71xx_add_ar934x_header;
+		ags->master_ag->ag71xx_remove_atheros_header = ag71xx_remove_ar934x_header;
+		return 0;
+	}
+	return -1;
+}
+
 void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
 {
-	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ag);
-	if(swdev){
-		struct ar7240sw *as = sw_to_ar7240(swdev);
-		u32 ctrl = ar7240sw_reg_read(as->mii_bus, AR7240_REG_PORT_CTRL(port));
-		u32 bmcr = ar7240sw_phy_read(as->mii_bus, port - 1, MII_BMCR);
-		printk(KERN_DEBUG "%s(%u, %d): bmcr do = 0x%x\n", __func__, port, state, bmcr);
+	if(ag->mii_bus){
+		u32 ctrl = ar7240sw_reg_read(ag->mii_bus, AR7240_REG_PORT_CTRL(port));
+		u32 bmcr = ar7240sw_phy_read(ag->mii_bus, port - 1, MII_BMCR);
+		//printk(KERN_DEBUG "%s(%u, %d): bmcr do = 0x%x\n", __func__, port, state, bmcr);
 		ctrl &= ~AR7240_PORT_CTRL_STATE_M;
 		if(state){
 			ctrl |= AR7240_PORT_CTRL_STATE_FORWARD;
@@ -1395,9 +1420,9 @@ void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
 			//отрубаем трансивер
 			bmcr |= BMCR_PDOWN;
 		}
-		ar7240sw_reg_write(as->mii_bus, AR7240_REG_PORT_CTRL(port), ctrl);
-		//printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
-		ar7240sw_phy_write(as->mii_bus, port - 1, MII_BMCR, bmcr);
+		ar7240sw_reg_write(ag->mii_bus, AR7240_REG_PORT_CTRL(port), ctrl);
+		printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
+		ar7240sw_phy_write(ag->mii_bus, port - 1, MII_BMCR, bmcr);
 	}
 }
 

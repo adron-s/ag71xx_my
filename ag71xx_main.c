@@ -1094,10 +1094,10 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 			err = ag71xx_remove_ar8216_header(ag, skb, pktlen);
 
 		if(likely(ag->has_switch)){
-			err = ag71xx_remove_ar9344_header(skb, pktlen, &port_num);
+			err = ag->ag71xx_remove_atheros_header(skb, pktlen, &port_num);
 			slave_dev = ag71xx_slave_devs[port_num &
 				AR7240_TX_HEADER_SOURCE_PORT_M]; //rx пакета это tx свитча к нам
-			  /*printk(KERN_DEBUG "%s x1: 0x%x -> 0x%lx, slave_dev = %s\n",
+			  /* printk(KERN_DEBUG "%s x1: 0x%x -> 0x%lx, slave_dev = %s\n",
 					__func__, port_num & 0xFF,
 					port_num & AR7240_TX_HEADER_SOURCE_PORT_M,
 					slave_dev ? slave_dev->name : "NULL"); */
@@ -1292,7 +1292,7 @@ static netdev_tx_t slave_dev_hard_start_xmit(struct sk_buff *skb,
 			return NET_XMIT_DROP;
 		}
 	}
-	ag71xx_add_ar9344_header(skb, ags->port_mask);
+	ags->ag71xx_add_atheros_header(skb, ags->ath_hdr_port_byte);
 	skb->dev = master_dev;
 	len = skb->len;
 	//вставляем нашу skb в очередь на передачу устройства master_dev
@@ -1404,7 +1404,7 @@ static const char *ag71xx_get_phy_if_mode_name(phy_interface_t mode)
 	return "unknown";
 }
 
-static int create_slave_device(struct ag71xx *master_ag, int port_num){
+static int create_slave_device(struct ag71xx *master_ag, int port_num, int sw_ver){
 	struct platform_device *pdev = master_ag->pdev;
 	struct net_device *dev = NULL;
 	char dev_name[sizeof(dev->name)];
@@ -1438,8 +1438,13 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num){
 	spin_lock_init(&ags->lock);
 	ags->is_master = 0;
 	ags->port_num = port_num;
-	ags->port_mask = BIT(port_num);
 	ags->master_ag = master_ag;
+	/* ags->port_num и ags->master_ag должны быть уже заданы! */
+	if(ag71xx_ar7240_cook_ags_depending_on_the_sw_ver(ags, sw_ver)){
+		err = -EINVAL;
+		dev_err(&pdev->dev, "unable to cook ags for sw_port %d\n", port_num);
+		goto err;
+	}
 	/* в начале ставим статус линка NO LINK. если это не так то
 		 slave_link_function при своем следующем вызове его поправит.
 		 и netif_carrier_off(dev) правильно умеет отрабатывать установку
@@ -1500,8 +1505,6 @@ static int ag71xx_probe(struct platform_device *pdev)
 	struct ag71xx *ag;
 	struct ag71xx_platform_data *pdata;
 	int tx_size, err;
-
-	memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
 
 	pdata = pdev->dev.platform_data;
 	if (!pdata) {
@@ -1622,15 +1625,20 @@ static int ag71xx_probe(struct platform_device *pdev)
 
 	if(pdata->switch_data){
 		int a;
+		int sw_ver;
+		printk(KERN_DEBUG "%s: NULLing ag71xx_slave_devs\n", __func__);
+		sw_ver = ag71xx_ar7240_get_sw_version(ag);
+		printk(KERN_DEBUG "%s: sw_ver = %d\n", __func__, sw_ver);
+		memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
 		ag->has_switch = 1;
 		ag71xx_ar7240_set_phy_init_pdown(ag, 1);
 		for(a = 1; a < ag71xx_ar7240_get_num_ports(ag); a++)
-  		create_slave_device(ag, a);
+  		create_slave_device(ag, a, sw_ver);
 		for(a = 0; a < ag71xx_slave_devs_count(); a++){
 			printk(KERN_DEBUG "sw port %d -> %s -> 0x%x\n", a,
 				ag71xx_slave_devs[a] ? ag71xx_slave_devs[a]->name : "EMPTY",
 				ag71xx_slave_devs[a] ? ((struct ag71xx_slave *)netdev_priv(
-				ag71xx_slave_devs[a]))->port_mask : -1);
+				ag71xx_slave_devs[a]))->ath_hdr_port_byte : -1);
 		}
 	}
 	return 0;

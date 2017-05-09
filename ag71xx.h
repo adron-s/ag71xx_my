@@ -185,12 +185,15 @@ struct ag71xx {
 #ifdef CONFIG_AG71XX_DEBUG_FS
 	struct ag71xx_debug	debug;
 #endif
+#ifdef CONFIG_AG71XX_ATH_HDR_SUPPORT
+	int (*ag71xx_remove_atheros_header)(struct sk_buff *skb, int pktlen, int *port_num);
+#endif
 };
 
 struct ag71xx_slave {
 	int is_master; //must be a first var!
 	int port_num;
-	int port_mask;
+	u8 ath_hdr_port_byte;
 	spinlock_t		lock;
 	struct net_device	*dev;
 	struct ag71xx *master_ag;
@@ -203,6 +206,7 @@ struct ag71xx_slave {
 	bool adj_aneg;
 	bool need_adjust;
 	struct delayed_work	link_work;
+	void (*ag71xx_add_atheros_header)(struct sk_buff *skb, u8 ath_hdr_port_byte);
 };
 
 extern struct ethtool_ops ag71xx_ethtool_ops;
@@ -484,23 +488,6 @@ static inline int ag71xx_has_ar8216(struct ag71xx *ag)
 }
 #endif
 
-#ifdef CONFIG_AG71XX_AR9344_SUPPORT
-void ag71xx_add_ar9344_header(struct sk_buff *skb, int port_mask);
-int ag71xx_remove_ar9344_header(struct sk_buff *skb, int pktlen, int *port_num);
-#else
-static inline void ag71xx_add_ar9344_header(struct sk_buff *skb,
-									 int port_mask){
-{
-}
-
-static inline int ag71xx_remove_ar9344_header(struct sk_buff *skb,
-									int pktlen, int *port_num)
-{
-	return 0;
-}
-#endif
-
-
 #ifdef CONFIG_AG71XX_DEBUG_FS
 int ag71xx_debugfs_root_init(void);
 void ag71xx_debugfs_root_exit(void);
@@ -528,6 +515,12 @@ struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag);
 struct phy_device *ag71xx_ar7240_get_phydev_for_slave(struct ag71xx_slave *ags);
 void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state);
 void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state);
+int ag71xx_ar7240_get_sw_version(struct ag71xx *ag);
+int ag71xx_ar7240_cook_ags_depending_on_the_sw_ver(struct ag71xx_slave *ags, int sw_ver);
+void ag71xx_add_ar7240_header(struct sk_buff *skb, u8 ath_hdr_port_byte);
+int ag71xx_remove_ar7240_header(struct sk_buff *skb, int pktlen, int *port_num);
+void ag71xx_add_ar934x_header(struct sk_buff *skb, u8 ath_hdr_port_byte);
+int ag71xx_remove_ar934x_header(struct sk_buff *skb, int pktlen, int *port_num);
 
 int ag71xx_mdio_mii_read(struct ag71xx_mdio *am, int addr, int reg);
 void ag71xx_mdio_mii_write(struct ag71xx_mdio *am, int addr, int reg, u16 val);

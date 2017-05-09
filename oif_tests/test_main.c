@@ -59,7 +59,7 @@ static int __init test_m_module_init(void){
     return -EINVAL;
   } */
 
-  oif_dev = dev_get_by_name(&init_net, "eth2");
+  oif_dev = dev_get_by_name(&init_net, "eth1");
   if(likely(oif_dev)){
     struct ag71xx *ag;
 		struct mii_bus *mii;
@@ -101,13 +101,19 @@ static int __init test_m_module_init(void){
 				//ar7240sw_reg_write(mii, AR934X_REG_PORT_VLAN2(a),
 					//								 vlan2 | (0x3F << AR934X_PORT_VLAN2_PORT_VID_MEM_S));
 				//disable port
-				ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(a), AR7240_PORT_CTRL_STATE_DISABLED);
+				//ar7240sw_reg_write(mii, AR7240_REG_PORT_CTRL(a), AR7240_PORT_CTRL_STATE_DISABLED);
 			}
+		}
+		{
+			u32 ver;
+			ctrl = ar7240sw_reg_read(mii, AR7240_REG_MASK_CTRL);
+			ver = (ctrl >> AR7240_MASK_CTRL_VERSION_S) & AR7240_MASK_CTRL_VERSION_M;
+			printk(KERN_DEBUG "%s: as->ver = 0x%x, ver = 0x%x\n", __func__, as->ver, ver);
 		}
 
 		//set cpu port and enable mirroring to it
-		cpu_port = 	ar7240sw_reg_read(mii, AR7240_REG_CPU_PORT);
-		printk(KERN_INFO "cpu port = 0x%x\n", cpu_port);
+		//cpu_port = 	ar7240sw_reg_read(mii, AR7240_REG_CPU_PORT);
+		//printk(KERN_INFO "cpu port = 0x%x\n", cpu_port);
 		//!ar7240sw_reg_write(mii, AR7240_REG_CPU_PORT, 0x100);
 
 		//enable atheros header
