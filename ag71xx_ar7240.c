@@ -291,10 +291,10 @@ struct ar7240sw {
 	struct mii_bus	*mii_bus;
 	struct ag71xx_switch_platform_data *swdata;
 	struct switch_dev swdev;
-	bool phy_init_pdown;
 	int num_ports;
 	u8 ver;
 	bool vlan;
+	bool iface_mode;
 	u16 vlan_id[AR7240_MAX_VLANS];
 	u8 vlan_table[AR7240_MAX_VLANS];
 	u8 vlan_tagged;
@@ -517,6 +517,21 @@ int ar7240sw_phy_write(struct mii_bus *mii, unsigned phy_addr,
 	return ret;
 }
 
+struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag)
+{
+	struct ar7240sw *as = ag->phy_priv;
+	if(!ag->has_slaves || !as)
+		return NULL;
+	return &as->swdev;
+}
+
+static struct ag71xx *ag71xx_ar7240_get_ag(struct switch_dev *swdev)
+{
+	if(swdev->netdev)
+		return netdev_priv(swdev->netdev);
+	return NULL;
+}
+
 static int ar7240sw_capture_stats(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
@@ -569,10 +584,18 @@ static void ar7240sw_setup(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
 
-	/* Enable CPU port, and set mirror port to 0(CPU port)*/
-	ar7240sw_reg_write(mii, AR7240_REG_CPU_PORT,
-			   AR7240_CPU_PORT_EN);// |
-	//	   (15 << AR7240_MIRROR_PORT_S));
+	printk(KERN_DEBUG "%s: iface_mode = %s\n",
+				 __func__, as->iface_mode ? "true" : "false");
+
+	if(!as->iface_mode)
+		/* Enable CPU port, and disable mirror port */
+	 	ar7240sw_reg_write(mii, AR7240_REG_CPU_PORT,
+											 AR7240_CPU_PORT_EN |
+										  (15 << AR7240_MIRROR_PORT_S));
+	else
+		/* Enable CPU port, and set mirror port to 0(CPU port)*/
+		ar7240sw_reg_write(mii, AR7240_REG_CPU_PORT,
+										   AR7240_CPU_PORT_EN);
 
 	/* Setup TAG priority mapping */
 	ar7240sw_reg_write(mii, AR7240_REG_TAG_PRIORITY, 0xfa50);
@@ -697,21 +720,22 @@ end:
 
 /* inspired by phy_poll_reset in drivers/net/phy/phy_device.c */
 static int
-ar7240sw_phy_poll_reset(struct mii_bus *bus)
+ar7240sw_phy_poll_reset(struct mii_bus *bus, bool iface_mode)
 {
 	const unsigned int sleep_msecs = 20;
 	int ret, elapsed, i;
+	int k = iface_mode ? 1 : 0;
 
 	for (elapsed = sleep_msecs; elapsed <= 600;
 	     elapsed += sleep_msecs) {
 		msleep(sleep_msecs);
-		for (i = 0; i < AR7240_NUM_PHYS - 1; i++) {
+		for (i = 0; i < AR7240_NUM_PHYS - k; i++) {
 			ret = ar7240sw_phy_read(bus, i, MII_BMCR);
 			if (ret < 0)
 				return ret;
 			if (ret & BMCR_RESET)
 				break;
-			if (i == AR7240_NUM_PHYS - 2) {
+			if (i == AR7240_NUM_PHYS - (1 + k)) {
 				usleep_range(1000, 2000);
 				return 0;
 			}
@@ -725,6 +749,7 @@ static int ar7240sw_reset(struct ar7240sw *as)
 	struct mii_bus *mii = as->mii_bus;
 	int ret;
 	int i;
+	int k = as->iface_mode ? 1 : 0;
 
 	printk(KERN_DEBUG "%s\n", __func__);
 
@@ -743,18 +768,19 @@ static int ar7240sw_reset(struct ar7240sw *as)
 				AR7240_MASK_CTRL_SOFT_RESET, 0, 1000);
 
 	/* setup PHYs */
-	for (i = 0; i < AR7240_NUM_PHYS - 1; i++) {
+	for (i = 0; i < AR7240_NUM_PHYS - k; i++) {
 		ar7240sw_phy_write(mii, i, MII_ADVERTISE,
 				   ADVERTISE_ALL | ADVERTISE_PAUSE_CAP |
 				   ADVERTISE_PAUSE_ASYM);
-		if(!as->phy_init_pdown)
-			ar7240sw_phy_write(mii, i, MII_BMCR,
-					   BMCR_RESET | BMCR_ANENABLE);
-		else /* ресет в этом случае должна сделать ag71xx_ar7240_set_port_state */
+		if(as->iface_mode) /* ресет в этом случае должна сделать ag71xx_ar7240_set_port_state */
 			ar7240sw_phy_write(mii, i, MII_BMCR,
 						 BMCR_PDOWN | BMCR_ANENABLE);
+		else
+			ar7240sw_phy_write(mii, i, MII_BMCR,
+					   BMCR_RESET | BMCR_ANENABLE);
+
 	}
-	ret = ar7240sw_phy_poll_reset(mii);
+	ret = ar7240sw_phy_poll_reset(mii, as->iface_mode);
 	if (ret)
 		return ret;
 
@@ -779,15 +805,18 @@ static void ar7240sw_setup_port(struct ar7240sw *as, unsigned port, u8 portmask)
 				   AR7240_PORT_STATUS_TXMAC |
 				   AR7240_PORT_STATUS_RXMAC |
 				   AR7240_PORT_STATUS_DUPLEX);
-		ctrl |= AR7240_PORT_CTRL_HEADER;
+		if(as->iface_mode)
+			ctrl |= AR7240_PORT_CTRL_HEADER;
 	} else {
 		ar7240sw_reg_write(mii, AR7240_REG_PORT_STATUS(port),
 				   AR7240_PORT_STATUS_LINK_AUTO);
 	}
-	//Disable learning for all ports!
-	ctrl &= ~AR7240_PORT_CTRL_LEARN;
-	ctrl &= ~AR7240_PORT_CTRL_LOCK_DROP; //Disarm LOCK_DROP_EN
-	ctrl |= AR7240_PORT_CTRL_PORT_LOCK; //Arm PORT_LOCK_EN
+	if(as->iface_mode){
+		//Disable learning for all ports!
+		ctrl &= ~AR7240_PORT_CTRL_LEARN;
+		ctrl &= ~AR7240_PORT_CTRL_LOCK_DROP; //Disarm LOCK_DROP_EN
+		ctrl |= AR7240_PORT_CTRL_PORT_LOCK; //Arm PORT_LOCK_EN
+	}
 
 	/* Set the default VID for this port */
 	if (as->vlan) {
@@ -957,7 +986,10 @@ ar7240_set_vlan(struct switch_dev *dev, const struct switch_attr *attr,
 		struct switch_val *val)
 {
 	struct ar7240sw *as = sw_to_ar7240(dev);
-	as->vlan = !!val->value.i;
+	if(!as->iface_mode) //вланы должны быть выключены в режиме iface_mode!
+		as->vlan = !!val->value.i;
+	else
+		as->vlan = false;
 	return 0;
 }
 
@@ -967,6 +999,44 @@ ar7240_get_vlan(struct switch_dev *dev, const struct switch_attr *attr,
 {
 	struct ar7240sw *as = sw_to_ar7240(dev);
 	val->value.i = as->vlan;
+	return 0;
+}
+
+void create_slave_devices(struct ag71xx *ag);
+static int
+ar7240_set_iface_mode(struct switch_dev *dev, const struct switch_attr *attr,
+		struct switch_val *val)
+{
+	struct ar7240sw *as = sw_to_ar7240(dev);
+	struct ag71xx *ag = ag71xx_ar7240_get_ag(dev);
+	bool iface_mode = !!val->value.i;
+
+	printk(KERN_DEBUG "%s: iface_mode = %s, prev_iface_mode = %s\n",
+				 __func__, iface_mode ? "true" : "false",
+				 as->iface_mode ? "true" : "false");
+
+	//задают тоже значение что уже было установлено ранее
+	if(as->iface_mode == iface_mode)
+		return 0;
+	//если пытаются на горячую отключить iface_mode
+	if(as->iface_mode && !iface_mode){
+		printk(KERN_ERR "%s: I can't disarm iface_mode. Please reboot!\n", __func__);
+		return -EINVAL;
+	}
+
+	as->iface_mode = iface_mode;
+	as->vlan = false; //вланы должны быть выключены в этом режиме!
+	if(ag && iface_mode)
+		create_slave_devices(ag);
+	return 0;
+}
+
+static int
+ar7240_get_iface_mode(struct switch_dev *dev, const struct switch_attr *attr,
+		struct switch_val *val)
+{
+	struct ar7240sw *as = sw_to_ar7240(dev);
+	val->value.i = as->iface_mode;
 	return 0;
 }
 
@@ -1034,8 +1104,8 @@ ar7240_hw_apply(struct switch_dev *dev)
 	for (i = 0; i < as->swdev.ports; i++)
 		ar7240sw_setup_port(as, i, portmask[i]);
 
-	//Flush all ATU entries
-	{
+	if(as->iface_mode){
+		//Flush all ATU entries(сброс всех записей в таблице мак/порт)
 		struct mii_bus *mii = as->mii_bus;
 		ar7240sw_reg_write(mii, AR7240_REG_ATU, 0x1);
 	}
@@ -1140,6 +1210,14 @@ static struct switch_attr ar7240_globals[] = {
 		.description = "Enable VLAN mode",
 		.set = ar7240_set_vlan,
 		.get = ar7240_get_vlan,
+		.max = 1
+	},
+	{
+		.type = SWITCH_TYPE_INT,
+		.name = "iface_mode",
+		.description = "Enable Interface mode",
+		.set = ar7240_set_iface_mode,
+		.get = ar7240_get_iface_mode,
 		.max = 1
 	},
 };
@@ -1357,19 +1435,13 @@ int ag71xx_ar7240_get_num_ports(struct ag71xx *ag)
 	return as->swdev.ports;
 }
 
-struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag)
-{
-	struct ar7240sw *as = ag->phy_priv;
-	if(!ag->has_switch || !as)
-		return NULL;
-	return &as->swdev;
-}
-
 struct phy_device *ag71xx_ar7240_get_phydev_for_slave(struct ag71xx_slave *ags){
 	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ags->master_ag);
 	if(swdev){
 		struct ar7240sw *as = sw_to_ar7240(swdev);
 		struct phy_device *phydev = as->mii_bus->phy_map[ags->port_num - 1];
+		if(!as->iface_mode)
+			return NULL;
 		return phydev;
 	}
 	return NULL;
@@ -1423,14 +1495,5 @@ void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
 		ar7240sw_reg_write(ag->mii_bus, AR7240_REG_PORT_CTRL(port), ctrl);
 		printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
 		ar7240sw_phy_write(ag->mii_bus, port - 1, MII_BMCR, bmcr);
-	}
-}
-
-void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state)
-{
-	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ag);
-	if(swdev){
-		struct ar7240sw *as = sw_to_ar7240(swdev);
-		as->phy_init_pdown = state;
 	}
 }

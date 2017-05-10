@@ -59,7 +59,7 @@ static int __init test_m_module_init(void){
     return -EINVAL;
   } */
 
-  oif_dev = dev_get_by_name(&init_net, "eth1");
+  oif_dev = dev_get_by_name(&init_net, "eth0");
   if(likely(oif_dev)){
     struct ag71xx *ag;
 		struct mii_bus *mii;
@@ -109,6 +109,12 @@ static int __init test_m_module_init(void){
 			ctrl = ar7240sw_reg_read(mii, AR7240_REG_MASK_CTRL);
 			ver = (ctrl >> AR7240_MASK_CTRL_VERSION_S) & AR7240_MASK_CTRL_VERSION_M;
 			printk(KERN_DEBUG "%s: as->ver = 0x%x, ver = 0x%x\n", __func__, as->ver, ver);
+		}
+		{
+			struct ag71xx *ag2 = NULL;
+			if(as->swdev.netdev)
+				ag2 = netdev_priv(as->swdev.netdev);
+			printk(KERN_DEBUG "%s: 0x%p =?= 0x%p\n", __func__, ag, ag2);
 		}
 
 		//set cpu port and enable mirroring to it

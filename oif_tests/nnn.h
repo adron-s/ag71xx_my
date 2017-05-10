@@ -275,7 +275,6 @@ struct ar7240sw_port_stat {
 	unsigned long tx_xlatecol;
 };
 
-
 struct ar7240sw {
 	struct mii_bus	*mii_bus;
 	struct ag71xx_switch_platform_data *swdata;
@@ -283,6 +282,7 @@ struct ar7240sw {
 	int num_ports;
 	u8 ver;
 	bool vlan;
+	bool iface_mode;
 	u16 vlan_id[AR7240_MAX_VLANS];
 	u8 vlan_table[AR7240_MAX_VLANS];
 	u8 vlan_tagged;

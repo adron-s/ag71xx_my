@@ -151,7 +151,7 @@ struct ag71xx_debug {
 
 struct ag71xx {
 	int is_master; //must be a first var!
-	int has_switch;
+	int has_slaves;
 	void __iomem		*mac_base;
 
 	spinlock_t		lock;
@@ -514,7 +514,6 @@ int ag71xx_ar7240_get_num_ports(struct ag71xx *ag);
 struct switch_dev *ag71xx_ar7240_get_swdev(struct ag71xx *ag);
 struct phy_device *ag71xx_ar7240_get_phydev_for_slave(struct ag71xx_slave *ags);
 void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state);
-void ag71xx_ar7240_set_phy_init_pdown(struct ag71xx *ag, unsigned state);
 int ag71xx_ar7240_get_sw_version(struct ag71xx *ag);
 int ag71xx_ar7240_cook_ags_depending_on_the_sw_ver(struct ag71xx_slave *ags, int sw_ver);
 void ag71xx_add_ar7240_header(struct sk_buff *skb, u8 ath_hdr_port_byte);

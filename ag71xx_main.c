@@ -734,7 +734,7 @@ static int ag71xx_open(struct net_device *dev)
 	ag71xx_wr(ag, AG71XX_REG_MAC_MFL, max_frame_len);
 	ag71xx_hw_set_macaddr(ag, dev->dev_addr);
 
-	printk(KERN_DEBUG "%s: %s, has_switch = %d\n", __func__, dev->name, ag->has_switch);
+	printk(KERN_DEBUG "%s: %s, has_slaves = %d\n", __func__, dev->name, ag->has_slaves);
 
 	ret = ag71xx_hw_enable(ag);
 	if (ret)
@@ -847,8 +847,8 @@ static netdev_tx_t ag71xx_hard_start_xmit(struct sk_buff *skb, struct net_device
 
 	skb_tx_timestamp(skb);
 
-	skb->dev->stats.tx_bytes += skb->len;
-	skb->dev->stats.tx_packets ++;
+	dev->stats.tx_bytes += skb->len;
+	dev->stats.tx_packets++;
 
 	desc->ctrl &= ~DESC_EMPTY;
 	ring->curr += n;
@@ -1081,6 +1081,10 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 		dma_unmap_single(&dev->dev, ring->buf[i].dma_addr,
 				 ag->rx_buf_size, DMA_FROM_DEVICE);
 
+		//крутнем статистику принятых пакетов на master интерфейсе
+		dev->stats.rx_packets++;
+		dev->stats.rx_bytes += pktlen;
+
 		skb = build_skb(ring->buf[i].rx_buf, ag71xx_buffer_size(ag));
 		if (!skb) {
 			skb_free_frag(ring->buf[i].rx_buf);
@@ -1093,29 +1097,22 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 		if (ag71xx_has_ar8216(ag))
 			err = ag71xx_remove_ar8216_header(ag, skb, pktlen);
 
-		if(likely(ag->has_switch)){
+		if(likely(ag->has_slaves)){
 			err = ag->ag71xx_remove_atheros_header(skb, pktlen, &port_num);
-			slave_dev = ag71xx_slave_devs[port_num &
-				AR7240_TX_HEADER_SOURCE_PORT_M]; //rx пакета это tx свитча к нам
+			slave_dev = ag71xx_slave_devs[ //rx пакета это tx свитча к нам
+				port_num & AR7240_TX_HEADER_SOURCE_PORT_M];
 			  /* printk(KERN_DEBUG "%s x1: 0x%x -> 0x%lx, slave_dev = %s\n",
 					__func__, port_num & 0xFF,
 					port_num & AR7240_TX_HEADER_SOURCE_PORT_M,
 					slave_dev ? slave_dev->name : "NULL"); */
 			if(likely(slave_dev)){
-				DBG("%s: slave dev %s\n",
-						dev->name, slave_dev->name);
-				//крутнем статистику принятых пакетов на master интерфейсе
-				dev->stats.rx_packets++;
-				dev->stats.rx_bytes += pktlen;
+				//крутнем статистику принятых пакетов на slave интерфейсе
+				slave_dev->stats.rx_packets++;
+				slave_dev->stats.rx_bytes += pktlen;
 				//dev уже не тот что раньше! помни про это! внизу обращайся ~только~ к skb->dev !
 				dev = slave_dev;
 			}
 		}
-
-		/* а это уже статистика принятых пакетов на целевом slave интерфейсе
-			 если конечно слейвы для данного phy используются */
-		dev->stats.rx_packets++;
-		dev->stats.rx_bytes += pktlen;
 
 		if (err) {
 			dev->stats.rx_dropped++;
@@ -1277,7 +1274,7 @@ static int ag71xx_change_mtu(struct net_device *dev, int new_mtu)
 }
 
 static netdev_tx_t slave_dev_hard_start_xmit(struct sk_buff *skb,
-					  struct net_device *dev)
+			 struct net_device *dev)
 {
 	int ret;
 	int len;
@@ -1498,6 +1495,24 @@ static void destroy_slave_device(struct ag71xx *master_ag, int port_num){
 	}
 }
 
+void create_slave_devices(struct ag71xx *ag){
+	int a;
+	int sw_ver;
+	printk(KERN_DEBUG "%s: NULLing ag71xx_slave_devs\n", __func__);
+	sw_ver = ag71xx_ar7240_get_sw_version(ag);
+	printk(KERN_DEBUG "%s: sw_ver = %d\n", __func__, sw_ver);
+	memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
+	ag->has_slaves = 1;
+	for(a = 1; a < ag71xx_ar7240_get_num_ports(ag); a++)
+ 		create_slave_device(ag, a, sw_ver);
+	for(a = 0; a < ag71xx_slave_devs_count(); a++){
+		printk(KERN_DEBUG "sw port %d -> %s -> 0x%x\n", a,
+			ag71xx_slave_devs[a] ? ag71xx_slave_devs[a]->name : "EMPTY",
+			ag71xx_slave_devs[a] ? ((struct ag71xx_slave *)netdev_priv(
+			ag71xx_slave_devs[a]))->ath_hdr_port_byte : -1);
+	}
+}
+
 static int ag71xx_probe(struct platform_device *pdev)
 {
 	struct net_device *dev;
@@ -1623,24 +1638,6 @@ static int ag71xx_probe(struct platform_device *pdev)
 		dev->name, dev->base_addr, dev->irq,
 		ag71xx_get_phy_if_mode_name(pdata->phy_if_mode));
 
-	if(pdata->switch_data){
-		int a;
-		int sw_ver;
-		printk(KERN_DEBUG "%s: NULLing ag71xx_slave_devs\n", __func__);
-		sw_ver = ag71xx_ar7240_get_sw_version(ag);
-		printk(KERN_DEBUG "%s: sw_ver = %d\n", __func__, sw_ver);
-		memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
-		ag->has_switch = 1;
-		ag71xx_ar7240_set_phy_init_pdown(ag, 1);
-		for(a = 1; a < ag71xx_ar7240_get_num_ports(ag); a++)
-  		create_slave_device(ag, a, sw_ver);
-		for(a = 0; a < ag71xx_slave_devs_count(); a++){
-			printk(KERN_DEBUG "sw port %d -> %s -> 0x%x\n", a,
-				ag71xx_slave_devs[a] ? ag71xx_slave_devs[a]->name : "EMPTY",
-				ag71xx_slave_devs[a] ? ((struct ag71xx_slave *)netdev_priv(
-				ag71xx_slave_devs[a]))->ath_hdr_port_byte : -1);
-		}
-	}
 	return 0;
 
 err_debugfs_exit:
