@@ -12,6 +12,7 @@ ag71xx-y	+= ag71xx_ethtool.o
 ag71xx-y	+= ag71xx_phy.o
 ag71xx-y	+= ag71xx_mdio.o
 ag71xx-y	+= ag71xx_ar7240.o
+ag71xx-y	+= ag71xx_slaves.o
 
 ag71xx-$(CONFIG_AG71XX_DEBUG_FS)	+= ag71xx_debugfs.o
 ag71xx-$(CONFIG_AG71XX_AR8216_SUPPORT)	+= ag71xx_ar8216.o

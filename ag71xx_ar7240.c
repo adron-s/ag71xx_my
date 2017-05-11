@@ -17,6 +17,7 @@
 #include <linux/bitops.h>
 #include <linux/switch.h>
 #include "ag71xx.h"
+#include "ag71xx_slaves.h"
 
 #define AR7240_REG_MASK_CTRL		0x00
 #define AR7240_MASK_CTRL_REVISION_M	BITM(8)
@@ -1002,7 +1003,6 @@ ar7240_get_vlan(struct switch_dev *dev, const struct switch_attr *attr,
 	return 0;
 }
 
-void create_slave_devices(struct ag71xx *ag);
 static int
 ar7240_set_iface_mode(struct switch_dev *dev, const struct switch_attr *attr,
 		struct switch_val *val)

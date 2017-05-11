@@ -215,8 +215,6 @@ void ag71xx_link_adjust(struct ag71xx *ag);
 int ag71xx_mdio_driver_init(void) __init;
 void ag71xx_mdio_driver_exit(void);
 
-struct ag71xx_slave *get_slave_ags_by_port_num(int port_num);
-
 int ag71xx_phy_connect(struct ag71xx *ag);
 void ag71xx_phy_connect_for_slaves(struct ag71xx_slave *ags);
 void ag71xx_phy_disconnect(struct ag71xx *ag);
