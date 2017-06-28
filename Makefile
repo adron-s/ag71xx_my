@@ -20,9 +20,6 @@ ag71xx-$(CONFIG_AG71XX_ATH_HDR_SUPPORT)	+= ag71xx_ath_hdr.o
 
 obj-$(CONFIG_AG71XX)	+= ag71xx.o
 
-# standard flags for module builds
-EXTRA_CFLAGS += -DLINUX -D__KERNEL__ -DMODULE -O2 -pipe -Wall
-
 ifdef CONFIG_AG71XX_ATH_HDR_SUPPORT
   EXTRA_CFLAGS += -DCONFIG_AG71XX_ATH_HDR_SUPPORT
 endif
