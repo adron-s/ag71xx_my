@@ -217,8 +217,10 @@ static int ag71xx_buffer_offset(struct ag71xx *ag)
 	 *
 	 * When using builtin AR8216 support, hardware adds a 2-byte header,
 	 * so we don't need any extra alignment in that case.
+	 * And of course if we use slaves functionality for switch ports,
+	 * the same problem has occurred !
 	 */
-	if (!ag71xx_get_pdata(ag)->is_ar724x || ag71xx_has_ar8216(ag))
+	if (ag->has_slaves || !ag71xx_get_pdata(ag)->is_ar724x || ag71xx_has_ar8216(ag))
 		return offset;
 
 	return offset + NET_IP_ALIGN;
