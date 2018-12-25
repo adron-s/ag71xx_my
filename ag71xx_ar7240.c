@@ -17,6 +17,7 @@
 #include <linux/bitops.h>
 #include <linux/switch.h>
 #include "ag71xx.h"
+#include "ag71xx_cross_switch.h"
 #include "ag71xx_slaves.h"
 
 #define AR7240_REG_MASK_CTRL		0x00
@@ -300,6 +301,7 @@ struct ar7240sw {
 	u8 vlan_table[AR7240_MAX_VLANS];
 	u8 vlan_tagged;
 	u16 pvid[AR7240_NUM_PORTS];
+	u8 advertise[AR7240_NUM_PORTS];
 	char buf[80];
 
 	rwlock_t stats_lock;
@@ -391,7 +393,7 @@ static void __ar7240sw_reg_write(struct mii_bus *mii, u32 reg, u32 val)
 	local_irq_restore(flags);
 }
 
-u32 ar7240sw_reg_read(struct mii_bus *mii, u32 reg_addr)
+static u32 ar7240sw_reg_read(struct mii_bus *mii, u32 reg_addr)
 {
 	u32 ret;
 
@@ -402,16 +404,16 @@ u32 ar7240sw_reg_read(struct mii_bus *mii, u32 reg_addr)
 	return ret;
 }
 
-EXPORT_SYMBOL_GPL(ar7240sw_reg_read);
+//EXPORT_SYMBOL_GPL(ar7240sw_reg_read);
 
-void ar7240sw_reg_write(struct mii_bus *mii, u32 reg_addr, u32 reg_val)
+static void ar7240sw_reg_write(struct mii_bus *mii, u32 reg_addr, u32 reg_val)
 {
 	mutex_lock(&reg_mutex);
 	__ar7240sw_reg_write(mii, reg_addr, reg_val);
 	mutex_unlock(&reg_mutex);
 }
 
-EXPORT_SYMBOL_GPL(ar7240sw_reg_write);
+//EXPORT_SYMBOL_GPL(ar7240sw_reg_write);
 
 static u32 ar7240sw_reg_rmw(struct mii_bus *mii, u32 reg, u32 mask, u32 val)
 {
@@ -585,8 +587,8 @@ static void ar7240sw_setup(struct ar7240sw *as)
 {
 	struct mii_bus *mii = as->mii_bus;
 
-	printk(KERN_DEBUG "%s: iface_mode = %s\n",
-				 __func__, as->iface_mode ? "true" : "false");
+	/* printk(KERN_DEBUG "%s: iface_mode = %s\n",
+				 __func__, as->iface_mode ? "true" : "false"); */
 
 	if(!as->iface_mode)
 		/* Enable CPU port, and disable mirror port */
@@ -646,79 +648,6 @@ static void ar7240sw_setup(struct ar7240sw *as)
 	ar7240sw_reg_rmw(mii, AR7240_REG_SERVICE_TAG, AR7240_SERVICE_TAG_M, 0);
 }
 
-static int ar7240_adjust_port_link(int port, struct switch_port_link *port_link){
-	int phy_addr = port - 1;
-	u16 bmcr = 0;
-	u32 aneg_adv = 0;
-	int ret = 0;
-  struct ag71xx_slave *ags = get_slave_ags_by_port_num(port);
-	struct mii_bus *mii = NULL;
-	struct switch_port_link fake_port_link;
-
-	if(!ags)
-		return -EINVAL;
-
-	if(port_link){
-		ags->adj_speed = port_link->speed;
-		ags->adj_duplex = port_link->duplex;
-		ags->adj_aneg = port_link->aneg;
-		ags->need_adjust = 1;
-	}else{
-		fake_port_link.speed = ags->adj_speed;
-		fake_port_link.duplex = ags->adj_duplex;
-		fake_port_link.aneg = ags->adj_aneg;
-		port_link = &fake_port_link;
-	}
-
-	if(!ags->need_adjust)
-		return 0;
-
-	mii = ags->master_ag->mii_bus;
-
-	printk(KERN_DEBUG "%s/%s: port = %u speed = %u, duplex = %u, aneg = %u\n",
-				 __func__, ags->dev->name, port, port_link->speed,
-				 port_link->duplex, port_link->aneg);
-
-	/* printk(KERN_DEBUG "%s/%s: do: MII_BMCR = 0x%x\n",
-		__func__, ags->dev->name, ar7240sw_phy_read(mii, phy_addr, MII_BMCR));
-	printk(KERN_DEBUG "%s/%s: do: MII_ADVERTISE = 0x%x\n",
-		__func__, ags->dev->name, ar7240sw_phy_read(mii, phy_addr, MII_ADVERTISE)); */
-
-	//режим битого порта
-	if(port_link->speed == SWITCH_PORT_SPEED_1000 && !port_link->duplex){
-		ags->speed = SWITCH_PORT_SPEED_10;
-		aneg_adv = ar7240sw_phy_read(mii, phy_addr, MII_ADVERTISE);
-		//запрет 10half, 100half/full. разрешаем только 10full
-		aneg_adv &= ~(ADVERTISE_10HALF | ADVERTISE_100HALF | ADVERTISE_100FULL);
-		aneg_adv |= ADVERTISE_10FULL;
-		printk(KERN_INFO "%s/%s: BAD port mode activated!\n",
-					 __func__, ags->dev->name);
-	}
-
-	ar7240sw_phy_write(mii, phy_addr, MII_BMCR, 0x0000);
-	if(port_link->aneg){
-		bmcr = BMCR_ANENABLE | BMCR_ANRESTART;
-	}else{
-		if(port_link->duplex)
-			bmcr |= BMCR_FULLDPLX;
-		switch(ags->speed){
-			case SWITCH_PORT_SPEED_10:
-				break;
-			case SWITCH_PORT_SPEED_100:
-				bmcr |= BMCR_SPEED100;
-				break;
-			default:
-				ret = -ENOTSUPP;
-				goto end;
-		}
-	}
-	if(aneg_adv)
-		ar7240sw_phy_write(mii, phy_addr, MII_ADVERTISE, aneg_adv);
-	ar7240sw_phy_write(mii, phy_addr, MII_BMCR, bmcr | BMCR_RESET);
-end:
-	return ret;
-}
-
 /* inspired by phy_poll_reset in drivers/net/phy/phy_device.c */
 static int
 ar7240sw_phy_poll_reset(struct mii_bus *bus, bool iface_mode)
@@ -752,7 +681,7 @@ static int ar7240sw_reset(struct ar7240sw *as)
 	int i;
 	int k = as->iface_mode ? 1 : 0;
 
-	printk(KERN_DEBUG "%s\n", __func__);
+	//printk(KERN_DEBUG "%s\n", __func__);
 
 	/* Set all ports to disabled state. */
 	for (i = 0; i < AR7240_NUM_PORTS; i++)
@@ -789,11 +718,19 @@ static int ar7240sw_reset(struct ar7240sw *as)
 	return ret;
 }
 
+/* проверялка номера порта для массива advertise */
+static int port_check_for_advertise(struct switch_dev *, int);
+
 static void ar7240sw_setup_port(struct ar7240sw *as, unsigned port, u8 portmask)
 {
 	struct mii_bus *mii = as->mii_bus;
 	u32 ctrl;
 	u32 vid, mode;
+	struct ag71xx *master_ag = ag71xx_ar7240_get_ag(&as->swdev);
+	u8 advertise = 0;
+
+	if(!port_check_for_advertise(&as->swdev, port))
+		advertise = as->advertise[port];
 
 	ctrl = AR7240_PORT_CTRL_STATE_FORWARD | AR7240_PORT_CTRL_LEARN |
 		AR7240_PORT_CTRL_SINGLE_VLAN;
@@ -870,7 +807,7 @@ static void ar7240sw_setup_port(struct ar7240sw *as, unsigned port, u8 portmask)
 		ar7240sw_reg_write(mii, AR7240_REG_PORT_VLAN(port), vlan);
 	}
 
-	ar7240_adjust_port_link(port, NULL);
+	ag71xx_cross_sw_adjust_port_link(master_ag, port, NULL, advertise);
 }
 
 static int ar7240_set_addr(struct ar7240sw *as, u8 *addr)
@@ -1011,9 +948,9 @@ ar7240_set_iface_mode(struct switch_dev *dev, const struct switch_attr *attr,
 	struct ag71xx *ag = ag71xx_ar7240_get_ag(dev);
 	bool iface_mode = !!val->value.i;
 
-	printk(KERN_DEBUG "%s: iface_mode = %s, prev_iface_mode = %s\n",
+	/* printk(KERN_DEBUG "%s: iface_mode = %s, prev_iface_mode = %s\n",
 				 __func__, iface_mode ? "true" : "false",
-				 as->iface_mode ? "true" : "false");
+				 as->iface_mode ? "true" : "false"); */
 
 	//задают тоже значение что уже было установлено ранее
 	if(as->iface_mode == iface_mode)
@@ -1026,8 +963,10 @@ ar7240_set_iface_mode(struct switch_dev *dev, const struct switch_attr *attr,
 
 	as->iface_mode = iface_mode;
 	as->vlan = false; //вланы должны быть выключены в этом режиме!
-	if(ag && iface_mode)
+	if(ag && iface_mode){
+		ag->sw_ver = ag71xx_ar7240_get_sw_version(ag);
 		create_slave_devices(ag);
+	}
 	return 0;
 }
 
@@ -1128,13 +1067,19 @@ ar7240_get_port_link(struct switch_dev *dev, int port,
 	struct ar7240sw *as = sw_to_ar7240(dev);
 	struct mii_bus *mii = as->mii_bus;
 	u32 status;
+	u32 link_auto;
 
 	if (port > AR7240_NUM_PORTS)
 		return -EINVAL;
 
 	status = ar7240sw_reg_read(mii, AR7240_REG_PORT_STATUS(port));
-	link->aneg = !!(status & AR7240_PORT_STATUS_LINK_AUTO);
-	if (link->aneg) {
+	/* в AR7240_PORT_STATUS_LINK_AUTO всегда 1. Так что читаем из MII */
+	link_auto = !!(status & AR7240_PORT_STATUS_LINK_AUTO);
+	link->aneg = !!(
+		ar7240sw_phy_read(mii, port - 1, MII_BMCR) &
+		BMCR_ANENABLE
+	);
+	if (link_auto) {
 		link->link = !!(status & AR7240_PORT_STATUS_LINK_UP);
 		if (!link->link)
 			return 0;
@@ -1163,25 +1108,13 @@ ar7240_get_port_link(struct switch_dev *dev, int port,
 static int ar7240_set_port_link(struct switch_dev *dev, int port,
 			     struct switch_port_link *port_link)
 {
-  struct ag71xx_slave *ags = get_slave_ags_by_port_num(port);
-	int ret = 0;
+	struct ag71xx *master_ag = ag71xx_ar7240_get_ag(dev);
+	struct ar7240sw *as = sw_to_ar7240(dev);
+	u8 advertise = 0;
+	if(!port_check_for_advertise(dev, port))
+		advertise = as->advertise[port];
 
-	if(!ags)
-		return -EINVAL;
-
-	if (port == dev->cpu_port)
-		return -EINVAL;
-
-	cancel_delayed_work_sync(&ags->link_work);
-
-	ags->speed = port_link->speed;
-	ags->duplex = port_link->duplex;
-	ags->aneg = port_link->aneg;
-
-	ret = ar7240_adjust_port_link(port, port_link);
-
-	schedule_delayed_work(&ags->link_work, HZ / 10);
-	return ret;
+	return cross_sw_set_port_link(master_ag, dev, port, port_link, advertise);
 }
 
 static int
@@ -1203,6 +1136,51 @@ ar7240_get_port_stats(struct switch_dev *dev, int port,
 	return 0;
 }
 
+/* это просто адаптированный код для ar7240 изначально написанный для ar8327 */
+static int port_check_for_advertise(struct switch_dev *dev, int port){
+	struct ar7240sw *as = sw_to_ar7240(dev);
+	if (port >= dev->ports)
+		return -EINVAL;
+	if (port == 0 || port == 5)
+		return -EOPNOTSUPP;
+	if(port >= sizeof(as->advertise) / sizeof(as->advertise[0]))
+		return -EINVAL;
+	return 0;
+}
+
+static int
+ar7240_sw_set_advertise_speeds(struct switch_dev *dev, const struct switch_attr *attr,
+		   struct switch_val *val)
+{
+	struct ar7240sw *as = sw_to_ar7240(dev);
+	int port = val->port_vlan;
+	int ret;
+
+	ret = port_check_for_advertise(dev, port);
+	if(ret)
+		return ret;
+
+	as->advertise[port] = val->value.i & 0xFF;
+	return 0;
+}
+
+static int
+ar7240_sw_get_advertise_speeds(struct switch_dev *dev, const struct switch_attr *attr,
+		   struct switch_val *val)
+{
+	struct ar7240sw *as = sw_to_ar7240(dev);
+	int port = val->port_vlan;
+	int ret;
+
+	ret = port_check_for_advertise(dev, port);
+	if(ret)
+		return ret;
+
+	val->value.i = as->advertise[port] & 0xFF;
+	return 0;
+}
+
+
 static struct switch_attr ar7240_globals[] = {
 	{
 		.type = SWITCH_TYPE_INT,
@@ -1223,6 +1201,13 @@ static struct switch_attr ar7240_globals[] = {
 };
 
 static struct switch_attr ar7240_port[] = {
+	{
+		.type = SWITCH_TYPE_INT,
+		.name = "advertise",
+		.description = "Auto-negotiation advertised port speeds",
+		.set = ar7240_sw_set_advertise_speeds,
+		.get = ar7240_sw_get_advertise_speeds,
+	},
 };
 
 static struct switch_attr ar7240_vlan[] = {
@@ -1471,11 +1456,20 @@ int ag71xx_ar7240_cook_ags_depending_on_the_sw_ver(
 		ags->master_ag->ag71xx_remove_atheros_header = ag71xx_remove_ar934x_header;
 		return 0;
 	}
+	if(sw_ver == EXT_SW_VERSION_AR8327){
+		ags->ath_hdr_port_byte = 0x80 + BIT(ags->port_num);
+		ags->ag71xx_add_atheros_header = ag71xx_add_ar934x_header;
+		ags->master_ag->ag71xx_remove_atheros_header = ag71xx_remove_ar934x_header;
+		return 0;
+	}
 	return -1;
 }
 
+/* эта ф-я только для ar7240! для ar8327 в самом драйвере я реализовал такую же ф-ю.
+	 устанавливает состояние порта: 1 - on или 0 - off */
 void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
 {
+	//printk(KERN_DEBUG "%s: port = %u, state = %d\n", __func__, port, state);
 	if(ag->mii_bus){
 		u32 ctrl = ar7240sw_reg_read(ag->mii_bus, AR7240_REG_PORT_CTRL(port));
 		u32 bmcr = ar7240sw_phy_read(ag->mii_bus, port - 1, MII_BMCR);
@@ -1493,7 +1487,7 @@ void ag71xx_ar7240_set_port_state(struct ag71xx *ag, unsigned port, int state)
 			bmcr |= BMCR_PDOWN;
 		}
 		ar7240sw_reg_write(ag->mii_bus, AR7240_REG_PORT_CTRL(port), ctrl);
-		printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
+		//printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
 		ar7240sw_phy_write(ag->mii_bus, port - 1, MII_BMCR, bmcr);
 	}
 }

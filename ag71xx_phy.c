@@ -171,8 +171,8 @@ static int ag71xx_phy_connect_multi(struct ag71xx *ag)
 
 	phydev->advertising = phydev->supported;
 
-	dev_info(dev, "connected to PHY at %s [uid=%08x, driver=%s]\n",
-		    dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name);
+	dev_info(dev, "connected to PHY at %s [uid=%08x, driver=%s, phy_priv=%p]\n",
+		    dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name, phydev->priv);
 
 	ag->link = 0;
 	ag->speed = 0;
@@ -227,6 +227,7 @@ int ag71xx_phy_connect(struct ag71xx *ag)
 		return ag71xx_phy_connect_fixed(ag);
 
 	ag->mii_bus = dev_to_mii_bus(pdata->mii_bus_dev);
+	//printk(KERN_DEBUG "%s: ag->mii_bus = 0x%p\n", ag->mii_bus);
 	if (ag->mii_bus == NULL) {
 		dev_err(&ag->pdev->dev, "unable to find MII bus on device '%s'\n",
 			   dev_name(pdata->mii_bus_dev));

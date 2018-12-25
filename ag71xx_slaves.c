@@ -1,10 +1,8 @@
 #include <linux/switch.h>
 #include "ag71xx.h"
+#include "ag71xx_cross_switch.h"
+#include "ag71xx_slaves.h"
 
-//для tx это номер порта
-#define AR7240_TX_HEADER_SOURCE_PORT_M BITM(3)
-//для rx это битовая маска!
-#define AR7240_RX_HEADER_SOURCE_PORT_M BITM(6)
 #define DEV_ADDR_ADD(dev_addr, _v){						\
 	int v = _v;																	\
 	unsigned char *p = &dev_addr[ETH_ALEN - 1];	\
@@ -17,16 +15,6 @@
 		else																			\
 			break;																	\
 	}																						\
-}
-
-struct net_device *ag71xx_slave_devs[AR7240_TX_HEADER_SOURCE_PORT_M + 1];
-#define ag71xx_slave_devs_count() 						\
-	(sizeof(ag71xx_slave_devs) / 								\
-	sizeof(ag71xx_slave_devs[0]))
-
-inline struct net_device *get_slave_dev_by_port_num(int port_num)
-{
-	return ag71xx_slave_devs[port_num & AR7240_TX_HEADER_SOURCE_PORT_M];
 }
 
 static netdev_tx_t slave_dev_hard_start_xmit(struct sk_buff *skb,
@@ -68,7 +56,7 @@ static int slave_dev_open(struct net_device *dev)
 		 так как он проинитит свитч ! */
 	ret = dev_open(master_dev);
 	if(!ret){
-		ag71xx_ar7240_set_port_state(ags->master_ag, ags->port_num, 1);
+		ag71xx_cross_sw_set_port_state(ags->master_ag, ags->port_num, 1);
 		netif_start_queue(dev);
 	}
 	return ret;
@@ -79,7 +67,7 @@ static int slave_dev_stop(struct net_device *dev)
   struct ag71xx_slave *ags = netdev_priv(dev);
 	cancel_delayed_work_sync(&ags->link_work);
 	netif_stop_queue(dev);
-	ag71xx_ar7240_set_port_state(ags->master_ag, ags->port_num, 0);
+	ag71xx_cross_sw_set_port_state(ags->master_ag, ags->port_num, 0);
 	return 0;
 }
 
@@ -88,7 +76,10 @@ static void slave_link_function(struct work_struct *work)
 	struct ag71xx_slave *ags = container_of(work, struct ag71xx_slave, link_work.work);
 	struct switch_port_link port_link;
 	struct switch_dev *swdev;
-	swdev = ag71xx_ar7240_get_swdev(ags->master_ag);
+	if(ags->master_ag && ags->master_ag->phy_swdev)
+		swdev = ags->master_ag->phy_swdev;
+	else
+		swdev = ag71xx_ar7240_get_swdev(ags->master_ag);
 	if(!swdev || !swdev->ops || !swdev->ops->get_port_link){
 		printk(KERN_ERR "BUG! %s: 0x%p, 0x%p, 0x%p\n",
 			__func__, swdev, swdev->ops, swdev->ops->get_port_link);
@@ -124,7 +115,7 @@ static const struct net_device_ops slave_dev_netdev_ops = {
 	.ndo_validate_addr	= eth_validate_addr,
 };
 
-static int create_slave_device(struct ag71xx *master_ag, int port_num, int sw_ver){
+static int create_slave_device(struct ag71xx *master_ag, u32 port_num, int sw_ver){
 	struct platform_device *pdev = master_ag->pdev;
 	struct net_device *dev = NULL;
 	char dev_name[sizeof(dev->name)];
@@ -137,9 +128,9 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num, int sw_ve
 		goto err_out;
 	}
 
-	if(ag71xx_slave_devs[port_num]){
+	if(get_slave_dev_by_port_num(master_ag, port_num)){
 		printk(KERN_ERR "BUG: %s: net_device(%s) for sw_port %d already exists",
-			__func__, ag71xx_slave_devs[port_num]->name, port_num);
+			__func__, get_slave_dev_by_port_num(master_ag, port_num)->name, port_num);
 		err = -EINVAL;
 		goto err_out;
 	}
@@ -169,13 +160,13 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num, int sw_ve
 		 slave_link_function при своем следующем вызове его поправит.
 		 и netif_carrier_off(dev) правильно умеет отрабатывать установку
 		 несущей до вызова register_netdev! он проверяет что статус ==
-		 NETREG_UNINITIALIZED и не ренерирует событие об изменении статуса
+		 NETREG_UNINITIALIZED и не генерирует событие об изменении статуса
 		 а просто тихонько правит нужный бит в dev->... */
 	ags->link = 0;
 	ags->speed = 0;
 	ags->duplex = 0;
 	netif_carrier_off(dev);
-	ag71xx_ar7240_set_port_state(master_ag, ags->port_num, 0);
+	ag71xx_cross_sw_set_port_state(master_ag, ags->port_num, 0);
 	//dev->base_addr = (unsigned long)master_ag->mac_base + port_num;
 	dev->netdev_ops = &slave_dev_netdev_ops;
 	memcpy(dev->dev_addr, master_ag->dev->dev_addr, ETH_ALEN);
@@ -186,8 +177,8 @@ static int create_slave_device(struct ag71xx *master_ag, int port_num, int sw_ve
 		goto err;
 	}
 	ags->dev = dev;
-	//индексирование в ag71xx_slave_devs по номеру порта! не путать с битовой маской!
-  ag71xx_slave_devs[port_num] = dev;
+	//индексирование в ag71xx->slave_devs по номеру порта! не путать с битовой маской!
+  set_slave_dev_by_port_num(master_ag, port_num, dev);
 	INIT_DELAYED_WORK(&ags->link_work, slave_link_function);
   return 0;
 err:
@@ -198,16 +189,8 @@ err_out:
 	return err;
 }
 
-struct ag71xx_slave *get_slave_ags_by_port_num(int port_num){
-	if(port_num < 0 || port_num >= ag71xx_slave_devs_count())
-		return NULL;
-	if(!ag71xx_slave_devs[port_num])
-		return NULL;
-	return netdev_priv(ag71xx_slave_devs[port_num]);
-}
-
-static void destroy_slave_device(struct ag71xx *master_ag, int port_num){
-	struct net_device *dev = ag71xx_slave_devs[port_num];
+static void destroy_slave_device(struct ag71xx *master_ag, u32 port_num){
+	struct net_device *dev = get_slave_dev_by_port_num(master_ag, port_num);
 	if(dev){
 		struct ag71xx_slave *ags = netdev_priv(dev);
 		cancel_delayed_work_sync(&ags->link_work);
@@ -215,29 +198,44 @@ static void destroy_slave_device(struct ag71xx *master_ag, int port_num){
 		unregister_netdev(dev);
 		dev_put(master_ag->dev);
 		free_netdev(dev);
+		set_slave_dev_by_port_num(master_ag, port_num, NULL);
 	}
 }
 
 void create_slave_devices(struct ag71xx *ag){
 	int a;
-	int sw_ver;
-	printk(KERN_DEBUG "%s: NULLing ag71xx_slave_devs\n", __func__);
-	sw_ver = ag71xx_ar7240_get_sw_version(ag);
-	printk(KERN_DEBUG "%s: sw_ver = %d\n", __func__, sw_ver);
-	memset(ag71xx_slave_devs, 0x0, sizeof(ag71xx_slave_devs));
+	if(ag->has_slaves){
+		printk(KERN_DEBUG "%s: Already has_slaves ! Do nothing !\n", __func__);
+		return;
+	}
+	printk(KERN_DEBUG "%s: sw_ver = 0x%x\n", __func__, ag->sw_ver);
 	ag->has_slaves = 1;
-	for(a = 1; a < ag71xx_ar7240_get_num_ports(ag); a++)
- 		create_slave_device(ag, a, sw_ver);
-	for(a = 0; a < ag71xx_slave_devs_count(); a++){
+	ag->slave_devs_count = ar71xx_get_sw_num_ports(ag);
+	ag->slave_devs = kzalloc(sizeof(ag->slave_devs[0]) * ag->slave_devs_count, GFP_KERNEL);
+	if(!ag->slave_devs){
+		ag->slave_devs_count = 0;
+		printk(KERN_ERR "%s: Can't alloc memory for ag->slave_devs !!!\n", __func__);
+		return;
+	}
+	for(a = 1; a < ar71xx_get_sw_num_ports(ag); a++)
+ 		create_slave_device(ag, a, ag->sw_ver);
+	for(a = 0; a < ag->slave_devs_count; a++){
+		struct net_device *sdd = get_slave_dev_by_port_num(ag, a);
 		printk(KERN_DEBUG "sw port %d -> %s -> 0x%x\n", a,
-			ag71xx_slave_devs[a] ? ag71xx_slave_devs[a]->name : "EMPTY",
-			ag71xx_slave_devs[a] ? ((struct ag71xx_slave *)netdev_priv(
-			ag71xx_slave_devs[a]))->ath_hdr_port_byte : -1);
+			sdd ? sdd->name : "EMPTY",
+			sdd ? ((struct ag71xx_slave *)netdev_priv(
+			sdd))->ath_hdr_port_byte : -1);
 	}
 }
 
 void destroy_slave_devices(struct ag71xx *ag){
 	int a;
-	for(a = 1; a < ag71xx_slave_devs_count(); a++)
+	//printk(KERN_DEBUG "%s: DESTROY !!!\n", __func__);
+	for(a = 1; a < ag->slave_devs_count; a++)
  		destroy_slave_device(ag, a);
+ 	if(ag->slave_devs){
+ 		ag->slave_devs_count = 0;
+ 		kfree(ag->slave_devs);
+ 		ag->slave_devs = NULL;
+ 	}
 }

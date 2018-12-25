@@ -714,7 +714,7 @@ static int ag71xx_open(struct net_device *dev)
 	ag71xx_wr(ag, AG71XX_REG_MAC_MFL, max_frame_len);
 	ag71xx_hw_set_macaddr(ag, dev->dev_addr);
 
-	printk(KERN_DEBUG "%s: %s, has_slaves = %d\n", __func__, dev->name, ag->has_slaves);
+	//printk(KERN_DEBUG "%s: %s, has_slaves = %d\n", __func__, dev->name, ag->has_slaves);
 
 	ret = ag71xx_hw_enable(ag);
 	if (ret)
@@ -1030,7 +1030,7 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 	int ring_size = BIT(ring->order);
 	struct sk_buff_head queue;
 	struct sk_buff *skb;
-	int port_num = 0;
+	u32 port_num = 0;
 	struct net_device *slave_dev;
 	int done = 0;
 
@@ -1079,10 +1079,11 @@ static int ag71xx_rx_packets(struct ag71xx *ag, int limit)
 
 		if(likely(ag->has_slaves)){
 			err = ag->ag71xx_remove_atheros_header(skb, pktlen, &port_num);
-			slave_dev = get_slave_dev_by_port_num(port_num); //rx пакета это tx свитча к нам
-			  /* printk(KERN_DEBUG "%s x1: 0x%x -> 0x%lx, slave_dev = %s\n",
+			port_num &= AR7240_TX_HEADER_SOURCE_PORT_M; //очистим лишние биты
+			slave_dev = get_slave_dev_by_port_num(ag, port_num); //rx пакета это tx свитча к нам
+			/* printk(KERN_DEBUG "%s x1: port=0x%x, slave_dev_ptr=0x%lx, slave_dev->name = %s\n",
 					__func__, port_num & 0xFF,
-					get_slave_dev_by_port_num(port_num),
+					slave_dev,
 					slave_dev ? slave_dev->name : "NULL"); */
 			if(likely(slave_dev)){
 				//крутнем статистику принятых пакетов на slave интерфейсе
