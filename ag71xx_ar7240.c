@@ -1204,7 +1204,7 @@ static struct switch_attr ar7240_port[] = {
 	{
 		.type = SWITCH_TYPE_INT,
 		.name = "advertise",
-		.description = "Auto-negotiation advertised port speeds",
+		.description = "Advertised port speeds for auto-negotiation",
 		.set = ar7240_sw_set_advertise_speeds,
 		.get = ar7240_sw_get_advertise_speeds,
 	},

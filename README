@@ -3,4 +3,4 @@ My version of ag71xx Atheros ethernet driver
 This version can separately work by each ar7240 switch
 port as with an independent network interface!
 
-AR8327 and QCA8337 ext switches supported too.
+AR8327 and QCA8337 ext switches are supported too.

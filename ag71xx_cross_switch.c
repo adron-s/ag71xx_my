@@ -104,8 +104,7 @@ int ag71xx_cross_sw_adjust_port_link(struct ag71xx *master_ag, u32 port, struct 
 	printk(KERN_DEBUG "%s/%s: do: MII_ADVERTISE = 0x%x\n",
 		__func__, ags->dev->name, ag71xx_cross_sw_mdio_read(master_ag, phy_addr, MII_ADVERTISE)); */
 
-	/* нам переданы биты для создания набора advertise скоростей.
-		 так же как с BAD портом но в виде множества. */
+	/* нам переданы биты для создания набора advertise скоростей */
 	if(advertise){
 		int v = advertise & 0xFF;
 		aneg_need_reset = 1;

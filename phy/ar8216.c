@@ -1930,7 +1930,7 @@ ar8xxx_create(void)
 	mutex_init(&priv->reg_mutex);
 	mutex_init(&priv->mib_lock);
 	INIT_DELAYED_WORK(&priv->mib_work, ar8xxx_mib_work_func);
-	strcpy(priv->ag71xx_dev_name, "eth0"); /* default net iface name */
+	strcpy(priv->ag71xx_dev_name, "eth0"); /* default switch net iface name */
 
 	return priv;
 }

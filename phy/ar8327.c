@@ -1107,11 +1107,11 @@ ar8xxx_sw_set_iface_mode(struct switch_dev *dev, const struct switch_attr *attr,
 				__func__, priv->ag71xx_dev_name);
 			return -EINVAL;
 		}
-		/* это кусочек кода взят из register_switch. т.к. там он вызывается с netdev == NULL
+		/* это кусочек кода взят из register_switch. т.к. там делается вызов с netdev == NULL
 			 то свитч получается без привязки к сетевому интерфейсу. здаесь мы это исправляем. */
 		dev->netdev = ag71xx_net_dev;
 		if(ag71xx_net_dev->name[0] != '\0')
-			dev->alias = ag71xx_net_dev->name;
+			dev->alias = ag71xx_net_dev->name; //чтобы работало: swconfig dev eth0
 		//создаем slave устройства
 		ag71xx_ext_sw_create_slave_devices(ag71xx_net_dev, dev);
 		dev_put(ag71xx_net_dev);
