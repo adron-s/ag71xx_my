@@ -435,13 +435,19 @@ ar8216_read_port_link(struct ar8xxx_priv *priv, int port,
 {
 	u32 status;
 	u32 speed;
+	u32 link_auto;
 
 	memset(link, '\0', sizeof(*link));
 
 	status = priv->chip->read_port_status(priv, port);
 
-	link->aneg = !!(status & AR8216_PORT_STATUS_LINK_AUTO);
-	if (link->aneg) {
+	/* в AR8216_PORT_STATUS_LINK_AUTO всегда 1. Так что читаем из MII */
+	link_auto = !!(status & AR8216_PORT_STATUS_LINK_AUTO);
+	link->aneg = !!(
+		mdiobus_read(priv->mii_bus, port - 1, MII_BMCR) &
+		BMCR_ANENABLE
+	);
+	if (link_auto) {
 		link->link = !!(status & AR8216_PORT_STATUS_LINK_UP);
 	} else {
 		link->link = true;
@@ -941,7 +947,6 @@ ar8xxx_sw_get_vlan(struct switch_dev *dev, const struct switch_attr *attr,
 	return 0;
 }
 
-
 int
 ar8xxx_sw_set_pvid(struct switch_dev *dev, int port, int vlan)
 {
@@ -1123,8 +1128,11 @@ ar8xxx_sw_hw_apply(struct switch_dev *dev)
 	/* flush all vlan translation unit entries */
 	priv->chip->vtu_flush(priv);
 
+	/* printk(KERN_DEBUG "%s: priv->init = %d, priv->iface_mode = %d",
+		 __func__, priv->init, priv->iface_mode); */
+
 	memset(portmask, 0, sizeof(portmask));
-	if (!priv->init) {
+	if (!priv->init && !priv->iface_mode) {
 		/* calculate the port destination masks and load vlans
 		 * into the vlan translation unit */
 		for (j = 0; j < AR8X16_MAX_VLANS; j++) {
@@ -1143,7 +1151,7 @@ ar8xxx_sw_hw_apply(struct switch_dev *dev)
 					    priv->vlan_table[j]);
 		}
 	} else {
-		/* vlan disabled:
+		/* vlan disabled or iface_mode is on:
 		 * isolate all ports, but connect them to the cpu port */
 		for (i = 0; i < dev->ports; i++) {
 			if (i == AR8216_PORT_CPU)
@@ -1157,6 +1165,11 @@ ar8xxx_sw_hw_apply(struct switch_dev *dev)
 	/* update the port destination mask registers and tag settings */
 	for (i = 0; i < dev->ports; i++) {
 		chip->setup_port(priv, i, portmask[i]);
+	}
+	/* после того как setup_port вырубил learning на всех портах отфлушим atu(arp) табличку */
+	if(priv->iface_mode){
+		//priv->reg_mutex уже и так локнут !
+		priv->chip->atu_flush(priv);
 	}
 
 	chip->set_mirror_regs(priv);
@@ -1917,6 +1930,7 @@ ar8xxx_create(void)
 	mutex_init(&priv->reg_mutex);
 	mutex_init(&priv->mib_lock);
 	INIT_DELAYED_WORK(&priv->mib_work, ar8xxx_mib_work_func);
+	strcpy(priv->ag71xx_dev_name, "eth0"); /* default net iface name */
 
 	return priv;
 }

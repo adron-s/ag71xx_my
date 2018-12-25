@@ -438,6 +438,8 @@ struct ar8xxx_priv {
 	struct arl_entry arl_table[AR8XXX_NUM_ARL_RECORDS];
 	char arl_buf[AR8XXX_NUM_ARL_RECORDS * 32 + 256];
 	bool link_up[AR8X16_MAX_PORTS];
+	u8 advertise[AR8X16_MAX_PORTS];
+	char ag71xx_dev_name[IFNAMSIZ];
 
 	bool init;
 
@@ -451,6 +453,7 @@ struct ar8xxx_priv {
 
 	/* all fields below are cleared on reset */
 	bool vlan;
+	bool iface_mode;
 	u16 vlan_id[AR8X16_MAX_VLANS];
 	u8 vlan_table[AR8X16_MAX_VLANS];
 	u8 vlan_tagged;
