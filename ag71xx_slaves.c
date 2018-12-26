@@ -107,11 +107,63 @@ static void slave_link_function(struct work_struct *work)
 	schedule_delayed_work(&ags->link_work, HZ / 2);
 }
 
+/* находит максимальный среди slave-ов mtu и устанавливает его на master интерфейс
+	 при вызове этой ф-и обязательно должен быть установлен rtnl_lock() !!!
+*/
+static void adjust_master_mtu(struct ag71xx *master_ag)
+{
+	int a;
+	int max_mtu = 0;
+	struct net_device *master_dev = master_ag->dev;
+	const struct net_device_ops *master_ops = master_dev->netdev_ops;
+	if(unlikely(!master_dev))
+		return;
+	for(a = 1; a < master_ag->slave_devs_count; a++){
+		struct net_device *dev = get_slave_dev_by_port_num(master_ag, a);
+		if(dev && (dev->mtu > max_mtu))
+			max_mtu = dev->mtu;
+	}
+	if(master_dev->mtu != max_mtu){
+		/* любые изменения в net_device должны быть защищены rtnl_lock() ! */
+		if(!rtnl_is_locked()){
+			printk(KERN_ERR "%s: rtnl is not LOCKED !\n", __func__);
+			return;
+		}
+	  //укладываем master интерфейс в down
+    dev_change_flags(master_dev, master_dev->flags & ~IFF_UP);
+    //меняем mtu
+		if(master_ops->ndo_change_mtu)
+			master_ops->ndo_change_mtu(master_dev, max_mtu);
+    //поднимаем master интерфейс
+		dev_change_flags(master_dev, master_dev->flags | IFF_UP);
+	}
+}
+
+static int slave_change_mtu(struct net_device *dev, int new_mtu)
+{
+  struct ag71xx_slave *ags = netdev_priv(dev);
+	struct ag71xx *master_ag = ags->master_ag;
+	unsigned int max_frame_len;
+
+	max_frame_len = ag71xx_max_frame_len(new_mtu);
+	if (new_mtu < 68 || max_frame_len > master_ag->max_frame_len)
+		return -EINVAL;
+
+	if (netif_running(dev))
+		return -EBUSY;
+
+	dev->mtu = new_mtu;
+	/* rtnl_lock() уже и так установлен! */
+	adjust_master_mtu(master_ag);
+	return 0;
+}
+
 static const struct net_device_ops slave_dev_netdev_ops = {
 	.ndo_open		= slave_dev_open,
 	.ndo_stop		= slave_dev_stop,
 	.ndo_start_xmit		= slave_dev_hard_start_xmit,
 	.ndo_set_mac_address	= eth_mac_addr,
+	.ndo_change_mtu		= slave_change_mtu,
 	.ndo_validate_addr	= eth_validate_addr,
 };
 

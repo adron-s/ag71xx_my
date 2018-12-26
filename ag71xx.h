@@ -533,4 +533,10 @@ u16 ar7240sw_phy_read(struct mii_bus *mii, unsigned phy_addr,
 int ar7240sw_phy_write(struct mii_bus *mii, unsigned phy_addr,
 		       unsigned reg_addr, u16 reg_val);
 
+#define ETH_SWITCH_HEADER_LEN	2
+static inline unsigned int ag71xx_max_frame_len(unsigned int mtu)
+{
+	return ETH_SWITCH_HEADER_LEN + ETH_HLEN + VLAN_HLEN + mtu + ETH_FCS_LEN;
+}
+
 #endif /* _AG71XX_H */
