@@ -441,12 +441,17 @@ ar8216_read_port_link(struct ar8xxx_priv *priv, int port,
 
 	status = priv->chip->read_port_status(priv, port);
 
-	/* в AR8216_PORT_STATUS_LINK_AUTO всегда 1. Так что читаем из MII */
 	link_auto = !!(status & AR8216_PORT_STATUS_LINK_AUTO);
-	link->aneg = !!(
-		mdiobus_read(priv->mii_bus, port - 1, MII_BMCR) &
-		BMCR_ANENABLE
-	);
+	/* в AR8216_PORT_STATUS_LINK_AUTO для обычных портов всегда 1. Так что читаем из MII */
+	if(port > 0 && port < 6){
+		link->aneg = !!(
+			mdiobus_read(priv->mii_bus, port - 1, MII_BMCR) &
+			BMCR_ANENABLE
+		);
+	}else{
+		//а вот для 6-го там бывает и 0
+		link->aneg = link_auto;
+	}
 	if (link_auto) {
 		link->link = !!(status & AR8216_PORT_STATUS_LINK_UP);
 	} else {

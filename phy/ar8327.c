@@ -496,6 +496,7 @@ ar8327_hw_config_pdata(struct ar8xxx_priv *priv,
 		return -EINVAL;
 
 	priv->get_port_link = pdata->get_port_link;
+	priv->port6_custom_set_power_state = pdata->port6_custom_set_power_state;
 
 	data->port0_status = ar8327_get_port_init_status(&pdata->port0_cfg);
 	data->port6_status = ar8327_get_port_init_status(&pdata->port6_cfg);
@@ -539,6 +540,9 @@ ar8327_hw_config_pdata(struct ar8xxx_priv *priv,
 			t &= ~(AR8327_SGMII_CTRL_EN_PLL |
 			       AR8327_SGMII_CTRL_EN_RX |
 			       AR8327_SGMII_CTRL_EN_TX);
+
+		/* printk(KERN_DEBUG "sgmii_ctrl = 0x%x, serdes_aen = %d, chip_rev = %d\n",
+			t, pdata->sgmii_cfg->serdes_aen, priv->chip_rev); */
 
 		ar8xxx_write(priv, AR8327_REG_SGMII_CTRL, t);
 
@@ -977,38 +981,70 @@ struct mii_bus *ar8327_get_mii_bus_from_swdev(struct switch_dev *dev){
 	return priv->mii_bus;
 }
 
+
+/* смещение ДВУХ битов 25:24 управления лампочкой для
+	 регистра LED_CTRL3(0x5C) свитча AR8327 */
+#define RB2011_NEW_SFP_PHY_ONOFF_S 24
+
+/* включает/выключает питание на трансивере SFP порта устройства Mikrotik rb2011r5 */
+static void rb2011_r5_set_port_power_state(struct ar8xxx_priv *priv, unsigned port, int state){
+	u32 val;
+	if(port != 6)
+		return;
+	val = ar8xxx_read(priv, AR8327_REG_LED_CTRL3);
+	val &= ~(0x3 << RB2011_NEW_SFP_PHY_ONOFF_S); //онуливаем
+	if(state)
+		val |= 0x2 << RB2011_NEW_SFP_PHY_ONOFF_S; //включаем
+	ar8xxx_write(priv, AR8327_REG_LED_CTRL3, val);
+}
+
+/* включает/выключает питание на трансивере указанного порта. умеет работать
+	 как с обычными портами так и с нестандартными(например SFP в 2011r5). */
+static void ar8327_set_port_power_state(struct ar8xxx_priv *priv, unsigned port, int state){
+	u32 bmcr;
+	struct mii_bus *bus = priv->mii_bus;
+	if(!bus)
+		return;
+	if(port == 6 && priv->port6_custom_set_power_state > 0){
+		if(priv->port6_custom_set_power_state == 20115)
+			rb2011_r5_set_port_power_state(priv, port, state);
+		return;
+	}
+	//printk(KERN_DEBUG "%s: port = %u, state = %d, bus = 0x%p\n", __func__, port, state, bus);
+	bmcr = mdiobus_read(bus, port - 1, MII_BMCR);
+	//printk(KERN_DEBUG "%s(%u, %d): bmcr do = 0x%x\n", __func__, port, state, bmcr);
+	if(state){
+		bmcr &= ~BMCR_PDOWN; //включаем питание на трансивер
+		bmcr |= BMCR_RESET; //дальше обязательно ресет чтобы применить изменения
+	}else{
+		//отрубаем трансивер
+		bmcr |= BMCR_PDOWN;
+	}
+	mdiobus_write(bus, port - 1, MII_BMCR, bmcr);
+	//printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
+}
+
 /* эта ф-я только для ar8327(и возможно для ar8216) !
 	 Она аналогична ar7240_set_port_state в самом ag71xx.  */
 void ar8327_set_port_state(struct switch_dev *dev, unsigned port, int state)
 {
 	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
-	struct mii_bus *bus = priv->mii_bus;
 	u32 ctrl;
-	u32 bmcr;
-	//printk(KERN_DEBUG "%s: port = %u, state = %d, bus = 0x%p\n", __func__, port, state, bus);
-	if(bus){
-		/* ЛОК! Никаких printk и return ! */
-		mutex_lock(&priv->reg_mutex);
-		ctrl = ar8xxx_read(priv, AR8327_REG_PORT_LOOKUP(port));
-		bmcr = mdiobus_read(bus, port - 1, MII_BMCR);
-		//printk(KERN_DEBUG "%s(%u, %d): bmcr do = 0x%x\n", __func__, port, state, bmcr);
-		ctrl &= ~AR8327_PORT_LOOKUP_STATE; //очистим биты PORT_LOOKUP_STATE
-		if(state){
-			ctrl |= AR8216_PORT_STATE_FORWARD << AR8327_PORT_LOOKUP_STATE_S;
-			bmcr &= ~BMCR_PDOWN; //включаем питание на трансивер
-			bmcr |= BMCR_RESET; //дальше обязательно ресет чтобы применить изменения
-		}else{
-			//отрубаем свитч порт(запрет всего tx/rx трафика)
-			ctrl |= AR8216_PORT_STATE_DISABLED << AR8327_PORT_LOOKUP_STATE_S;
-			//отрубаем трансивер
-			bmcr |= BMCR_PDOWN;
-		}
-		ar8xxx_write(priv, AR8327_REG_PORT_LOOKUP(port), ctrl);
-		mdiobus_write(bus, port - 1, MII_BMCR, bmcr);
-		/* UnLOCK */
-		mutex_unlock(&priv->reg_mutex);
-		//printk(KERN_DEBUG "%s(%u, %d): bmcr po = 0x%x\n", __func__, port, state, bmcr);
+	/* ЛОК! Никаких printk и return ! */
+	mutex_lock(&priv->reg_mutex);
+	ctrl = ar8xxx_read(priv, AR8327_REG_PORT_LOOKUP(port));
+	ctrl &= ~AR8327_PORT_LOOKUP_STATE; //очистим биты PORT_LOOKUP_STATE
+	if(state){
+		ctrl |= AR8216_PORT_STATE_FORWARD << AR8327_PORT_LOOKUP_STATE_S;
+	}else{
+		//отрубаем свитч порт(запрет всего tx/rx трафика)
+		ctrl |= AR8216_PORT_STATE_DISABLED << AR8327_PORT_LOOKUP_STATE_S;
 	}
+	ar8xxx_write(priv, AR8327_REG_PORT_LOOKUP(port), ctrl);
+	//включаем или выключаем питание на трансивер
+	ar8327_set_port_power_state(priv, port, state);
+	/* UnLOCK */
+	mutex_unlock(&priv->reg_mutex);
 }
 
 /* возвращает указатель на struct ag71xx через swdev */
@@ -1036,7 +1072,6 @@ static int ar8327_set_port_link(struct switch_dev *dev, int port,
 		return -EINVAL;
 	if(!port_check_for_advertise(dev, port))
 		advertise = priv->advertise[port];
-
 	return cross_sw_set_port_link(master_ag, dev, port, port_link, advertise);
 }
 
@@ -1055,7 +1090,59 @@ static void ar8327_setup_port_helper(struct switch_dev *dev, int port)
 	ag71xx_cross_sw_adjust_port_link(master_ag, port, NULL, advertise);
 }
 
-//#define OWL_DEBUG
+/* вспомогательная ф-я вызываемая из ag71xx_cross_sw_adjust_port_link
+	 для установки параметра link для 6-го порта нашего свитча. */
+void ar8327_adjust_port_link(struct switch_dev *dev, u32 port,
+struct switch_port_link *port_link, u8 advertise){
+	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
+	struct ar8327_data *data = priv->chip_data;
+	struct ar8327_port_cfg cfg;
+	u32 t;
+	if(port != 6)
+		return;
+	/* 6-й порт у нас это как правило sfp и доступа через MII BMC регистры
+	 к PHY у нас нет. Так что тут крутим что есть. */
+	/* printk(KERN_INFO "%s: %d, port_link->aneg = %d, advertise = 0x%x, port_link->speed=%d\n",
+		__func__, port, port_link->aneg, advertise, port_link->speed); */
+	/* сформируем фейковый cfg для ф-и ar8327_get_port_init_status.
+		 я это все делаю чтобы иметь возможность на горячую
+		 посредством команды swconfig dev switch0 port 6 set link "duplex full speed 1000 autoneg off"
+		 переключать порт в режим автонеготирации и обратно. в OpenWRT режим порта(автонеготинация есть
+		 или нет) выбирается железно в mach-rb*.c файле. Но меня это не устраивает. Для SFP портов
+		 бывает очень важно отключить неготинацию и железно установить скорость.
+	*/
+	if(port_link->aneg){
+		cfg.force_link = 0;
+	}else{
+		cfg.force_link = 1;
+	}
+	cfg.duplex = !!port_link->duplex;
+	switch(port_link->speed){
+		case SWITCH_PORT_SPEED_10:
+			cfg.speed = AR8327_PORT_SPEED_10;
+			break;
+		case SWITCH_PORT_SPEED_100:
+			cfg.speed = AR8327_PORT_SPEED_100;
+			break;
+		case SWITCH_PORT_SPEED_1000:
+			cfg.speed = AR8327_PORT_SPEED_1000;
+			break;
+		default:
+			cfg.speed = 0;
+	}
+	cfg.txpause = 1; //tx и rx flow control пока оставляем влюченным.
+	cfg.rxpause = 1; //в будущем можно будет приделать выключатель.
+	//получаем значения битов
+	t =	ar8327_get_port_init_status(&cfg);
+	//printk(KERN_INFO "%s: 0x%x vs 0x%x\n", __func__, t, data->port6_status);
+	if(t != data->port6_status){
+		ar8xxx_write(priv, AR8327_REG_PORT_STATUS(port), t);
+		//в этом драйвере статус 6-го порта сохраняется в data->port6_status !
+		data->port6_status = t;
+	}
+}
+
+#define OWL_DEBUG
 
 #ifdef OWL_DEBUG
 #include <linux/kallsyms.h>
@@ -1073,13 +1160,13 @@ ar8xxx_sw_set_iface_mode(struct switch_dev *dev, const struct switch_attr *attr,
 	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
 	bool iface_mode = !!val->value.i;
 #ifdef OWL_DEBUG /* блок для глубокой отладки */
-	if(val->value.i == 222){
+	if(val->value.i >= 222){
 		AoWL_debug_cb *owl;
 		printk(KERN_DEBUG "%s: iface_mode = DEBUG call !, priv = %p",
 				 __func__, priv);
 		owl = (void*)kallsyms_lookup_name("AoWL_debug_cb");
 		if(owl)
-			owl(dev, priv, priv->mii_bus, 0x0, 0x0, 0x0);
+			owl(dev, priv, priv->mii_bus, 0x0, 0x0, val->value.i);
 		else
 			printk(KERN_ERR "%s: Can't lookup AoWL_debug_cb !!!\n", __func__);
 		return 0;

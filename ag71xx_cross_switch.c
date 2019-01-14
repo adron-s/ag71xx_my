@@ -62,6 +62,7 @@ int ag71xx_cross_sw_mdio_write(struct ag71xx *master_ag, unsigned phy_addr, unsi
 	}
 }
 
+void ar8327_adjust_port_link(struct switch_dev *, u32, struct switch_port_link *, u8);
 /* применяется для ручной установки скорости на портах */
 int ag71xx_cross_sw_adjust_port_link(struct ag71xx *master_ag, u32 port, struct switch_port_link *port_link, u8 advertise){
 	int phy_addr = port - 1;
@@ -103,6 +104,15 @@ int ag71xx_cross_sw_adjust_port_link(struct ag71xx *master_ag, u32 port, struct 
 		__func__, ags->dev->name, ag71xx_cross_sw_mdio_read(master_ag, phy_addr, MII_BMCR));
 	printk(KERN_DEBUG "%s/%s: do: MII_ADVERTISE = 0x%x\n",
 		__func__, ags->dev->name, ag71xx_cross_sw_mdio_read(master_ag, phy_addr, MII_ADVERTISE)); */
+
+	if(port == 6){ //sgmii порт
+		/* для 6-го порта у нас нет доступа к phy но свитч драйвер
+			 может достать его через регистры */
+		if(master_ag->sw_ver == EXT_SW_VERSION_AR8327)
+			if(master_ag->phy_swdev)
+				ar8327_adjust_port_link(master_ag->phy_swdev, port, port_link, advertise);
+		return 0;
+	}
 
 	/* нам переданы биты для создания набора advertise скоростей */
 	if(advertise){

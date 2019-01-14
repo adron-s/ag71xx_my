@@ -424,6 +424,7 @@ struct ar8xxx_priv {
 	struct phy_device *phy;
 
 	int (*get_port_link)(unsigned port);
+	u32 port6_custom_set_power_state;
 
 	const struct net_device_ops *ndo_old;
 	struct net_device_ops ndo;
