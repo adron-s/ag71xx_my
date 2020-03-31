@@ -4,3 +4,7 @@ This version can separately work by each ar7240 switch
 port as with an independent network interface!
 
 AR8327 and QCA8337 ext switches are supported too.
+
+Для ./phy/ вместо прямой правки openwrt/target/.../ мы делаем патч:
+	diff -rNu a b > ./003-switch-qca8337-iface_mode.patch
+Так уж исторически сложилось.
