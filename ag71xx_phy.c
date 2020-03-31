@@ -135,6 +135,7 @@ static int ag71xx_phy_connect_multi(struct ag71xx *ag)
 		if (!(pdata->phy_mask & (1 << phy_addr)))
 			continue;
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
 		if (ag->mii_bus->phy_map[phy_addr] == NULL)
 			continue;
 
@@ -145,6 +146,18 @@ static int ag71xx_phy_connect_multi(struct ag71xx *ag)
 
 		if (phydev == NULL)
 			phydev = ag->mii_bus->phy_map[phy_addr];
+#else
+		if (ag->mii_bus->mdio_map[phy_addr] == NULL)
+			continue;
+
+		DBG("%s: PHY found at %s, uid=%08x\n",
+			dev_name(dev),
+			dev_name(&ag->mii_bus->mdio_map[phy_addr]->dev),
+			ag->mii_bus->mdio_map[phy_addr]->phy_id);
+
+		if (phydev == NULL)
+			phydev = mdiobus_get_phy(ag->mii_bus, phy_addr);
+#endif
 	}
 
 	if (!phydev) {
@@ -153,13 +166,21 @@ static int ag71xx_phy_connect_multi(struct ag71xx *ag)
 		return -ENODEV;
 	}
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
 	ag->phy_dev = phy_connect(ag->dev, dev_name(&phydev->dev),
+#else
+	ag->phy_dev = phy_connect(ag->dev, phydev_name(phydev),
+#endif
 				  &ag71xx_phy_link_adjust,
 				  pdata->phy_if_mode);
 
 	if (IS_ERR(ag->phy_dev)) {
 		dev_err(dev, "could not connect to PHY at %s\n",
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
 			   dev_name(&phydev->dev));
+#else
+			   phydev_name(phydev));
+#endif
 		return PTR_ERR(ag->phy_dev);
 	}
 
@@ -172,7 +193,12 @@ static int ag71xx_phy_connect_multi(struct ag71xx *ag)
 	phydev->advertising = phydev->supported;
 
 	dev_info(dev, "connected to PHY at %s [uid=%08x, driver=%s, phy_priv=%p]\n",
-		    dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name, phydev->priv);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+		    dev_name(&phydev->dev),
+#else
+		    phydev_name(phydev),
+#endif
+		    phydev->phy_id, phydev->drv->name, phydev->priv);
 
 	ag->link = 0;
 	ag->speed = 0;

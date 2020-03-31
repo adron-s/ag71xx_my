@@ -76,6 +76,7 @@
 
 #define AR7240_REG_CPU_PORT		0x78
 #define AR7240_MIRROR_PORT_S		4
+#define AR7240_MIRROR_PORT_M		BITM(4)
 #define AR7240_CPU_PORT_EN		BIT(8)
 
 #define AR7240_REG_MIB_FUNCTION0	0x80
@@ -1069,7 +1070,7 @@ ar7240_get_port_link(struct switch_dev *dev, int port,
 	u32 status;
 	u32 link_auto;
 
-	if (port > AR7240_NUM_PORTS)
+	if (port >= AR7240_NUM_PORTS)
 		return -EINVAL;
 
 	status = ar7240sw_reg_read(mii, AR7240_REG_PORT_STATUS(port));
@@ -1123,7 +1124,7 @@ ar7240_get_port_stats(struct switch_dev *dev, int port,
 {
 	struct ar7240sw *as = sw_to_ar7240(dev);
 
-	if (port > AR7240_NUM_PORTS)
+	if (port >= AR7240_NUM_PORTS)
 		return -EINVAL;
 
 	ar7240sw_capture_stats(as);
@@ -1418,18 +1419,6 @@ int ag71xx_ar7240_get_num_ports(struct ag71xx *ag)
 	if (!as)
 		return 0;
 	return as->swdev.ports;
-}
-
-struct phy_device *ag71xx_ar7240_get_phydev_for_slave(struct ag71xx_slave *ags){
-	struct switch_dev *swdev = ag71xx_ar7240_get_swdev(ags->master_ag);
-	if(swdev){
-		struct ar7240sw *as = sw_to_ar7240(swdev);
-		struct phy_device *phydev = as->mii_bus->phy_map[ags->port_num - 1];
-		if(!as->iface_mode)
-			return NULL;
-		return phydev;
-	}
-	return NULL;
 }
 
 int ag71xx_ar7240_get_sw_version(struct ag71xx *ag){
