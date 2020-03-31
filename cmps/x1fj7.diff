@@ -1,0 +1,1151 @@
+diff -rNu ./old-2017/ag71xx_ar7240.c ./new-2020/ag71xx_ar7240.c
+--- ./old-2017/ag71xx_ar7240.c	2020-03-30 15:37:20.000000000 +0300
++++ ./new-2020/ag71xx_ar7240.c	2020-02-27 23:32:54.000000000 +0200
+@@ -77,6 +77,7 @@
+ 
+ #define AR7240_REG_CPU_PORT		0x78
+ #define AR7240_MIRROR_PORT_S		4
++#define AR7240_MIRROR_PORT_M		BITM(4)
+ #define AR7240_CPU_PORT_EN		BIT(8)
+ 
+ #define AR7240_REG_MIB_FUNCTION0	0x80
+@@ -963,7 +964,7 @@
+ 	struct mii_bus *mii = as->mii_bus;
+ 	u32 status;
+ 
+-	if (port > AR7240_NUM_PORTS)
++	if (port >= AR7240_NUM_PORTS)
+ 		return -EINVAL;
+ 
+ 	status = ar7240sw_reg_read(mii, AR7240_REG_PORT_STATUS(port));
+@@ -1000,7 +1001,7 @@
+ {
+ 	struct ar7240sw *as = sw_to_ar7240(dev);
+ 
+-	if (port > AR7240_NUM_PORTS)
++	if (port >= AR7240_NUM_PORTS)
+ 		return -EINVAL;
+ 
+ 	ar7240sw_capture_stats(as);
+@@ -1013,6 +1014,134 @@
+ 	return 0;
+ }
+ 
++static int
++ar7240_set_mirror_monitor_port(struct switch_dev *dev,
++				const struct switch_attr *attr,
++				struct switch_val *val)
++{
++	struct ar7240sw *as = sw_to_ar7240(dev);
++	struct mii_bus *mii = as->mii_bus;
++
++	int port = val->value.i;
++
++	if (port > 15)
++		return -EINVAL;
++
++	ar7240sw_reg_rmw(mii, AR7240_REG_CPU_PORT,
++		AR7240_MIRROR_PORT_M << AR7240_MIRROR_PORT_S,
++		port << AR7240_MIRROR_PORT_S);
++
++	return 0;
++}
++
++static int
++ar7240_get_mirror_monitor_port(struct switch_dev *dev,
++				const struct switch_attr *attr,
++				struct switch_val *val)
++{
++	struct ar7240sw *as = sw_to_ar7240(dev);
++	struct mii_bus *mii = as->mii_bus;
++
++	u32 ret;
++
++	ret = ar7240sw_reg_read(mii, AR7240_REG_CPU_PORT);
++	val->value.i = (ret >> AR7240_MIRROR_PORT_S) & AR7240_MIRROR_PORT_M;
++
++	return 0;
++}
++
++static int
++ar7240_set_mirror_rx(struct switch_dev *dev, const struct switch_attr *attr,
++		      struct switch_val *val)
++{
++	struct ar7240sw *as = sw_to_ar7240(dev);
++	struct mii_bus *mii = as->mii_bus;
++
++	int port = val->port_vlan;
++
++	if (port >= dev->ports)
++		return -EINVAL;
++
++	if (val && val->value.i == 1)
++		ar7240sw_reg_set(mii, AR7240_REG_PORT_CTRL(port),
++			AR7240_PORT_CTRL_MIRROR_RX);
++	else
++		ar7240sw_reg_rmw(mii, AR7240_REG_PORT_CTRL(port),
++			AR7240_PORT_CTRL_MIRROR_RX, 0);
++
++	return 0;
++}
++
++static int
++ar7240_get_mirror_rx(struct switch_dev *dev, const struct switch_attr *attr,
++		      struct switch_val *val)
++{
++	struct ar7240sw *as = sw_to_ar7240(dev);
++	struct mii_bus *mii = as->mii_bus;
++
++	u32 ctrl;
++
++	int port = val->port_vlan;
++
++	if (port >= dev->ports)
++		return -EINVAL;
++
++	ctrl = ar7240sw_reg_read(mii, AR7240_REG_PORT_CTRL(port));
++
++	if ((ctrl & AR7240_PORT_CTRL_MIRROR_RX) == AR7240_PORT_CTRL_MIRROR_RX)
++		val->value.i = 1;
++	else
++		val->value.i = 0;
++
++	return 0;
++}
++
++static int
++ar7240_set_mirror_tx(struct switch_dev *dev, const struct switch_attr *attr,
++		      struct switch_val *val)
++{
++	struct ar7240sw *as = sw_to_ar7240(dev);
++	struct mii_bus *mii = as->mii_bus;
++
++	int port = val->port_vlan;
++
++	if (port >= dev->ports)
++		return -EINVAL;
++
++	if (val && val->value.i == 1)
++		ar7240sw_reg_set(mii, AR7240_REG_PORT_CTRL(port),
++			AR7240_PORT_CTRL_MIRROR_TX);
++	else
++		ar7240sw_reg_rmw(mii, AR7240_REG_PORT_CTRL(port),
++			AR7240_PORT_CTRL_MIRROR_TX, 0);
++
++	return 0;
++}
++
++static int
++ar7240_get_mirror_tx(struct switch_dev *dev, const struct switch_attr *attr,
++		      struct switch_val *val)
++{
++	struct ar7240sw *as = sw_to_ar7240(dev);
++	struct mii_bus *mii = as->mii_bus;
++
++	u32 ctrl;
++
++	int port = val->port_vlan;
++
++	if (port >= dev->ports)
++		return -EINVAL;
++
++	ctrl = ar7240sw_reg_read(mii, AR7240_REG_PORT_CTRL(port));
++
++	if ((ctrl & AR7240_PORT_CTRL_MIRROR_TX) == AR7240_PORT_CTRL_MIRROR_TX)
++		val->value.i = 1;
++	else
++		val->value.i = 0;
++
++	return 0;
++}
++
+ static struct switch_attr ar7240_globals[] = {
+ 	{
+ 		.type = SWITCH_TYPE_INT,
+@@ -1022,9 +1151,33 @@
+ 		.get = ar7240_get_vlan,
+ 		.max = 1
+ 	},
++	{
++		.type = SWITCH_TYPE_INT,
++		.name = "mirror_monitor_port",
++		.description = "Mirror monitor port",
++		.set = ar7240_set_mirror_monitor_port,
++		.get = ar7240_get_mirror_monitor_port,
++		.max = 15
++	},
+ };
+ 
+ static struct switch_attr ar7240_port[] = {
++	{
++		.type = SWITCH_TYPE_INT,
++		.name = "enable_mirror_rx",
++		.description = "Enable mirroring of RX packets",
++		.set = ar7240_set_mirror_rx,
++		.get = ar7240_get_mirror_rx,
++		.max = 1
++	},
++	{
++		.type = SWITCH_TYPE_INT,
++		.name = "enable_mirror_tx",
++		.description = "Enable mirroring of TX packets",
++		.set = ar7240_set_mirror_tx,
++		.get = ar7240_get_mirror_tx,
++		.max = 1
++	},
+ };
+ 
+ static struct switch_attr ar7240_vlan[] = {
+diff -rNu ./old-2017/ag71xx_debugfs.c ./new-2020/ag71xx_debugfs.c
+--- ./old-2017/ag71xx_debugfs.c	2020-03-30 15:37:20.000000000 +0300
++++ ./new-2020/ag71xx_debugfs.c	2020-02-27 23:32:54.000000000 +0200
+@@ -175,8 +175,8 @@
+ 		return -ENOMEM;
+ 
+ 	len += snprintf(buf + len, buflen - len,
+-			"Idx ... %-8s %-8s %-8s %-8s . %-10s\n",
+-			"desc", "next", "data", "ctrl", "timestamp");
++			"Idx ... %-8s %-8s %-8s %-8s .\n",
++			"desc", "next", "data", "ctrl");
+ 
+ 	spin_lock_irqsave(&ag->lock, flags);
+ 
+@@ -184,12 +184,11 @@
+ 	dirty = (ring->dirty & ring_mask);
+ 	desc_hw = ag71xx_rr(ag, desc_reg);
+ 	for (i = 0; i < ring_size; i++) {
+-		struct ag71xx_buf *ab = &ring->buf[i];
+ 		struct ag71xx_desc *desc = ag71xx_ring_desc(ring, i);
+ 		u32 desc_dma = ((u32) ring->descs_dma) + i * AG71XX_DESC_SIZE;
+ 
+ 		len += snprintf(buf + len, buflen - len,
+-			"%3d %c%c%c %08x %08x %08x %08x %c %10lu\n",
++			"%3d %c%c%c %08x %08x %08x %08x %c\n",
+ 			i,
+ 			(i == curr) ? 'C' : ' ',
+ 			(i == dirty) ? 'D' : ' ',
+@@ -198,8 +197,7 @@
+ 			desc->next,
+ 			desc->data,
+ 			desc->ctrl,
+-			(desc->ctrl & DESC_EMPTY) ? 'E' : '*',
+-			ab->timestamp);
++			(desc->ctrl & DESC_EMPTY) ? 'E' : '*');
+ 	}
+ 
+ 	spin_unlock_irqrestore(&ag->lock, flags);
+diff -rNu ./old-2017/ag71xx_ethtool.c ./new-2020/ag71xx_ethtool.c
+--- ./old-2017/ag71xx_ethtool.c	2020-03-30 15:37:20.000000000 +0300
++++ ./new-2020/ag71xx_ethtool.c	2020-02-27 23:32:54.000000000 +0200
+@@ -86,7 +86,7 @@
+ 	struct ag71xx *ag = netdev_priv(dev);
+ 	unsigned tx_size;
+ 	unsigned rx_size;
+-	int err;
++	int err = 0;
+ 
+ 	if (er->rx_mini_pending != 0||
+ 	    er->rx_jumbo_pending != 0 ||
+diff -rNu ./old-2017/ag71xx.h ./new-2020/ag71xx.h
+--- ./old-2017/ag71xx.h	2020-03-30 15:37:20.000000000 +0300
++++ ./new-2020/ag71xx.h	2020-02-27 23:32:54.000000000 +0200
+@@ -40,7 +40,12 @@
+ #define AG71XX_DRV_NAME		"ag71xx"
+ #define AG71XX_DRV_VERSION	"0.5.35"
+ 
+-#define AG71XX_NAPI_WEIGHT	64
++/*
++ * For our NAPI weight bigger does *NOT* mean better - it means more
++ * D-cache misses and lots more wasted cycles than we'll ever
++ * possibly gain from saving instructions.
++ */
++#define AG71XX_NAPI_WEIGHT	32
+ #define AG71XX_OOM_REFILL	(1 + HZ/10)
+ 
+ #define AG71XX_INT_ERR	(AG71XX_INT_RX_BE | AG71XX_INT_TX_BE)
+@@ -61,6 +66,8 @@
+ #define AG71XX_TX_RING_SIZE_MAX		128
+ #define AG71XX_RX_RING_SIZE_MAX		256
+ 
++#define QCA955X_SGMII_LINK_WAR_MAX_TRY	10
++
+ #ifdef CONFIG_AG71XX_DEBUG
+ #define DBG(fmt, args...)	pr_debug(fmt, ## args)
+ #else
+@@ -95,9 +102,8 @@
+ 	};
+ 	union {
+ 		dma_addr_t	dma_addr;
+-		unsigned long	timestamp;
++		unsigned int		len;
+ 	};
+-	unsigned int		len;
+ };
+ 
+ struct ag71xx_ring {
+@@ -112,7 +118,9 @@
+ 
+ struct ag71xx_mdio {
+ 	struct mii_bus		*mii_bus;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+ 	int			mii_irq[PHY_MAX_ADDR];
++#endif
+ 	void __iomem		*mdio_base;
+ 	struct ag71xx_mdio_platform_data *pdata;
+ };
+@@ -148,20 +156,31 @@
+ };
+ 
+ struct ag71xx {
+-	void __iomem		*mac_base;
++	/*
++	 * Critical data related to the per-packet data path are clustered
++	 * early in this structure to help improve the D-cache footprint.
++	 */
++	struct ag71xx_ring	rx_ring ____cacheline_aligned;
++	struct ag71xx_ring	tx_ring ____cacheline_aligned;
++
++	unsigned int            max_frame_len;
++	unsigned int            desc_pktlen_mask;
++	unsigned int            rx_buf_size;
+ 
+-	spinlock_t		lock;
+-	struct platform_device	*pdev;
+ 	struct net_device	*dev;
++	struct platform_device  *pdev;
++	spinlock_t		lock;
+ 	struct napi_struct	napi;
+ 	u32			msg_enable;
+ 
++	/*
++	 * From this point onwards we're not looking at per-packet fields.
++	 */
++	void __iomem		*mac_base;
++
+ 	struct ag71xx_desc	*stop_desc;
+ 	dma_addr_t		stop_desc_dma;
+ 
+-	struct ag71xx_ring	rx_ring;
+-	struct ag71xx_ring	tx_ring;
+-
+ 	struct mii_bus		*mii_bus;
+ 	struct phy_device	*phy_dev;
+ 	void			*phy_priv;
+@@ -170,10 +189,6 @@
+ 	unsigned int		speed;
+ 	int			duplex;
+ 
+-	unsigned int		max_frame_len;
+-	unsigned int		desc_pktlen_mask;
+-	unsigned int		rx_buf_size;
+-
+ 	struct delayed_work	restart_work;
+ 	struct delayed_work	link_work;
+ 	struct timer_list	oom_timer;
+diff -rNu ./old-2017/ag71xx_main.c ./new-2020/ag71xx_main.c
+--- ./old-2017/ag71xx_main.c	2020-03-30 15:37:20.000000000 +0300
++++ ./new-2020/ag71xx_main.c	2020-02-27 23:32:54.000000000 +0200
+@@ -13,13 +13,6 @@
+ 
+ #include "ag71xx.h"
+ 
+-#if LINUX_VERSION_CODE < KERNEL_VERSION(4,2,0)
+-static inline void skb_free_frag(void *data)
+-{
+-	put_page(virt_to_head_page(data));
+-}
+-#endif
+-
+ #define AG71XX_DEFAULT_MSG_ENABLE	\
+ 	(NETIF_MSG_DRV			\
+ 	| NETIF_MSG_PROBE		\
+@@ -38,6 +31,7 @@
+ #define ETH_SWITCH_HEADER_LEN	2
+ 
+ static int ag71xx_tx_packets(struct ag71xx *ag, bool flush);
++static void ag71xx_qca955x_sgmii_init(void);
+ 
+ static inline unsigned int ag71xx_max_frame_len(unsigned int mtu)
+ {
+@@ -97,41 +91,6 @@
+ 		(intr & AG71XX_INT_RX_BE) ? "RXBE " : "");
+ }
+ 
+-static void ag71xx_ring_free(struct ag71xx_ring *ring)
+-{
+-	int ring_size = BIT(ring->order);
+-	kfree(ring->buf);
+-
+-	if (ring->descs_cpu)
+-		dma_free_coherent(NULL, ring_size * AG71XX_DESC_SIZE,
+-				  ring->descs_cpu, ring->descs_dma);
+-}
+-
+-static int ag71xx_ring_alloc(struct ag71xx_ring *ring)
+-{
+-	int ring_size = BIT(ring->order);
+-	int err;
+-
+-	ring->descs_cpu = dma_alloc_coherent(NULL, ring_size * AG71XX_DESC_SIZE,
+-					     &ring->descs_dma, GFP_ATOMIC);
+-	if (!ring->descs_cpu) {
+-		err = -ENOMEM;
+-		goto err;
+-	}
+-
+-
+-	ring->buf = kzalloc(ring_size * sizeof(*ring->buf), GFP_KERNEL);
+-	if (!ring->buf) {
+-		err = -ENOMEM;
+-		goto err;
+-	}
+-
+-	return 0;
+-
+-err:
+-	return err;
+-}
+-
+ static void ag71xx_ring_tx_clean(struct ag71xx *ag)
+ {
+ 	struct ag71xx_ring *ring = &ag->tx_ring;
+@@ -322,30 +281,56 @@
+ 
+ static int ag71xx_rings_init(struct ag71xx *ag)
+ {
+-	int ret;
++	struct ag71xx_ring *tx = &ag->tx_ring;
++	struct ag71xx_ring *rx = &ag->rx_ring;
++	int ring_size = BIT(tx->order) + BIT(rx->order);
++	int tx_size = BIT(tx->order);
++
++	tx->buf = kzalloc(ring_size * sizeof(*tx->buf), GFP_KERNEL);
++	if (!tx->buf)
++		return -ENOMEM;
++
++	tx->descs_cpu = dma_alloc_coherent(NULL, ring_size * AG71XX_DESC_SIZE,
++					   &tx->descs_dma, GFP_ATOMIC);
++	if (!tx->descs_cpu) {
++		kfree(tx->buf);
++		tx->buf = NULL;
++		return -ENOMEM;
++	}
+ 
+-	ret = ag71xx_ring_alloc(&ag->tx_ring);
+-	if (ret)
+-		return ret;
++	rx->buf = &tx->buf[BIT(tx->order)];
++	rx->descs_cpu = ((void *)tx->descs_cpu) + tx_size * AG71XX_DESC_SIZE;
++	rx->descs_dma = tx->descs_dma + tx_size * AG71XX_DESC_SIZE;
+ 
+ 	ag71xx_ring_tx_init(ag);
++	return ag71xx_ring_rx_init(ag);
++}
+ 
+-	ret = ag71xx_ring_alloc(&ag->rx_ring);
+-	if (ret)
+-		return ret;
++static void ag71xx_rings_free(struct ag71xx *ag)
++{
++	struct ag71xx_ring *tx = &ag->tx_ring;
++	struct ag71xx_ring *rx = &ag->rx_ring;
++	int ring_size = BIT(tx->order) + BIT(rx->order);
+ 
+-	ret = ag71xx_ring_rx_init(ag);
+-	return ret;
++	if (tx->descs_cpu)
++		dma_free_coherent(NULL, ring_size * AG71XX_DESC_SIZE,
++				  tx->descs_cpu, tx->descs_dma);
++
++	kfree(tx->buf);
++
++	tx->descs_cpu = NULL;
++	rx->descs_cpu = NULL;
++	tx->buf = NULL;
++	rx->buf = NULL;
+ }
+ 
+ static void ag71xx_rings_cleanup(struct ag71xx *ag)
+ {
+ 	ag71xx_ring_rx_clean(ag);
+-	ag71xx_ring_free(&ag->rx_ring);
+-
+ 	ag71xx_ring_tx_clean(ag);
++	ag71xx_rings_free(ag);
++
+ 	netdev_reset_queue(ag->dev);
+-	ag71xx_ring_free(&ag->tx_ring);
+ }
+ 
+ static unsigned char *ag71xx_speed_str(struct ag71xx *ag)
+@@ -469,8 +454,8 @@
+ 	/* setup FIFO configuration registers */
+ 	ag71xx_wr(ag, AG71XX_REG_FIFO_CFG0, FIFO_CFG0_INIT);
+ 	if (pdata->is_ar724x) {
+-		ag71xx_wr(ag, AG71XX_REG_FIFO_CFG1, pdata->fifo_cfg1);
+-		ag71xx_wr(ag, AG71XX_REG_FIFO_CFG2, pdata->fifo_cfg2);
++		ag71xx_wr(ag, AG71XX_REG_FIFO_CFG1, 0x0010ffff);
++		ag71xx_wr(ag, AG71XX_REG_FIFO_CFG2, 0x015500aa);
+ 	} else {
+ 		ag71xx_wr(ag, AG71XX_REG_FIFO_CFG1, 0x0fff0000);
+ 		ag71xx_wr(ag, AG71XX_REG_FIFO_CFG2, 0x00001fff);
+@@ -612,7 +597,7 @@
+ 	if (pdata->is_ar91xx)
+ 		fifo3 = 0x00780fff;
+ 	else if (pdata->is_ar724x)
+-		fifo3 = pdata->fifo_cfg3;
++		fifo3 = 0x01f00140;
+ 	else
+ 		fifo3 = 0x008001ff;
+ 
+@@ -626,9 +611,28 @@
+ 	if (update && pdata->set_speed)
+ 		pdata->set_speed(ag->speed);
+ 
++	if (update && pdata->enable_sgmii_fixup)
++		ag71xx_qca955x_sgmii_init();
++
+ 	ag71xx_wr(ag, AG71XX_REG_MAC_CFG2, cfg2);
+ 	ag71xx_wr(ag, AG71XX_REG_FIFO_CFG5, fifo5);
+ 	ag71xx_wr(ag, AG71XX_REG_MAC_IFCTL, ifctl);
++
++	if (pdata->disable_inline_checksum_engine) {
++		/*
++		 * The rx ring buffer can stall on small packets on QCA953x and
++		 * QCA956x. Disabling the inline checksum engine fixes the stall.
++		 * The wr, rr functions cannot be used since this hidden register
++		 * is outside of the normal ag71xx register block.
++		 */
++		void __iomem *dam = ioremap_nocache(0xb90001bc, 0x4);
++		if (dam) {
++			__raw_writel(__raw_readl(dam) & ~BIT(27), dam);
++			(void)__raw_readl(dam);
++			iounmap(dam);
++		}
++	}
++
+ 	ag71xx_hw_start(ag);
+ 
+ 	netif_carrier_on(ag->dev);
+@@ -816,7 +820,6 @@
+ 	i = (ring->curr + n - 1) & ring_mask;
+ 	ring->buf[i].len = skb->len;
+ 	ring->buf[i].skb = skb;
+-	ring->buf[i].timestamp = jiffies;
+ 
+ 	netdev_sent_queue(dev, skb->len);
+ 
+@@ -914,6 +917,81 @@
+ 	schedule_delayed_work(&ag->restart_work, 1);
+ }
+ 
++static void ag71xx_bit_set(void __iomem *reg, u32 bit)
++{
++	u32 val = __raw_readl(reg) | bit;
++	__raw_writel(val, reg);
++	__raw_readl(reg);
++}
++
++static void ag71xx_bit_clear(void __iomem *reg, u32 bit)
++{
++	u32 val = __raw_readl(reg) & ~bit;
++	__raw_writel(val, reg);
++	__raw_readl(reg);
++}
++
++static void ag71xx_qca955x_sgmii_init()
++{
++	void __iomem *gmac_base;
++	u32 mr_an_status, sgmii_status;
++	u8 tries = 0;
++
++	gmac_base = ioremap_nocache(QCA955X_GMAC_BASE, QCA955X_GMAC_SIZE);
++
++	if (!gmac_base)
++		goto sgmii_out;
++
++	mr_an_status = __raw_readl(gmac_base + QCA955X_GMAC_REG_MR_AN_STATUS);
++	if (!(mr_an_status & QCA955X_MR_AN_STATUS_AN_ABILITY))
++		goto sgmii_out;
++
++	__raw_writel(QCA955X_SGMII_RESET_RX_CLK_N_RESET ,
++		     gmac_base + QCA955X_GMAC_REG_SGMII_RESET);
++	__raw_readl(gmac_base + QCA955X_GMAC_REG_SGMII_RESET);
++	udelay(10);
++
++	/* Init sequence */
++	ag71xx_bit_set(gmac_base + QCA955X_GMAC_REG_SGMII_RESET,
++		       QCA955X_SGMII_RESET_HW_RX_125M_N);
++	udelay(10);
++
++	ag71xx_bit_set(gmac_base + QCA955X_GMAC_REG_SGMII_RESET,
++		       QCA955X_SGMII_RESET_RX_125M_N);
++	udelay(10);
++
++	ag71xx_bit_set(gmac_base + QCA955X_GMAC_REG_SGMII_RESET,
++		       QCA955X_SGMII_RESET_TX_125M_N);
++	udelay(10);
++
++	ag71xx_bit_set(gmac_base + QCA955X_GMAC_REG_SGMII_RESET,
++		       QCA955X_SGMII_RESET_RX_CLK_N);
++	udelay(10);
++
++	ag71xx_bit_set(gmac_base + QCA955X_GMAC_REG_SGMII_RESET,
++		       QCA955X_SGMII_RESET_TX_CLK_N);
++	udelay(10);
++
++	do {
++		ag71xx_bit_set(gmac_base + QCA955X_GMAC_REG_MR_AN_CONTROL,
++			       QCA955X_MR_AN_CONTROL_PHY_RESET |
++			       QCA955X_MR_AN_CONTROL_AN_ENABLE);
++		udelay(100);
++		ag71xx_bit_clear(gmac_base + QCA955X_GMAC_REG_MR_AN_CONTROL,
++				 QCA955X_MR_AN_CONTROL_PHY_RESET);
++		mdelay(10);
++		sgmii_status = __raw_readl(gmac_base + QCA955X_GMAC_REG_SGMII_DEBUG) & 0xF;
++
++		if (tries++ >= QCA955X_SGMII_LINK_WAR_MAX_TRY) {
++			pr_warn("ag71xx: max retries for SGMII fixup exceeded!\n");
++			break;
++		}
++	} while (!(sgmii_status == 0xf || sgmii_status == 0x10));
++
++sgmii_out:
++	iounmap(gmac_base);
++}
++
+ static void ag71xx_restart_work_func(struct work_struct *work)
+ {
+ 	struct ag71xx *ag = container_of(work, struct ag71xx, restart_work.work);
+@@ -926,10 +1004,12 @@
+ 	rtnl_unlock();
+ }
+ 
+-static bool ag71xx_check_dma_stuck(struct ag71xx *ag, unsigned long timestamp)
++static bool ag71xx_check_dma_stuck(struct ag71xx *ag)
+ {
++	unsigned long timestamp;
+ 	u32 rx_sm, tx_sm, rx_fd;
+ 
++	timestamp = netdev_get_tx_queue(ag->dev, 0)->trans_start;
+ 	if (likely(time_before(jiffies, timestamp + HZ/10)))
+ 		return false;
+ 
+@@ -969,7 +1049,7 @@
+ 
+ 		if (!flush && !ag71xx_desc_empty(desc)) {
+ 			if (pdata->is_ar724x &&
+-			    ag71xx_check_dma_stuck(ag, ring->buf[i].timestamp)) {
++			    ag71xx_check_dma_stuck(ag)) {
+ 				schedule_delayed_work(&ag->restart_work, HZ / 2);
+ 				dma_stuck = true;
+ 			}
+@@ -999,12 +1079,12 @@
+ 
+ 	DBG("%s: %d packets sent out\n", ag->dev->name, sent);
+ 
+-	ag->dev->stats.tx_bytes += bytes_compl;
+-	ag->dev->stats.tx_packets += sent;
+-
+ 	if (!sent)
+ 		return 0;
+ 
++	ag->dev->stats.tx_bytes += bytes_compl;
++	ag->dev->stats.tx_packets += sent;
++
+ 	netdev_completed_queue(ag->dev, sent, bytes_compl);
+ 	if ((ring->curr - ring->dirty) < (ring_size * 3) / 4)
+ 		netif_wake_queue(ag->dev);
+diff -rNu ./old-2017/ag71xx_mdio.c ./new-2020/ag71xx_mdio.c
+--- ./old-2017/ag71xx_mdio.c	2020-03-30 15:37:20.000000000 +0300
++++ ./new-2020/ag71xx_mdio.c	2020-02-27 23:32:54.000000000 +0200
+@@ -234,7 +234,7 @@
+ 	if (!res) {
+ 		dev_err(&pdev->dev, "no iomem resource found\n");
+ 		err = -ENXIO;
+-		goto err_out;
++		goto err_free_mdio;
+ 	}
+ 
+ 	am->mdio_base = ioremap_nocache(res->start, res->end - res->start + 1);
+@@ -254,14 +254,16 @@
+ 	am->mii_bus->read = ag71xx_mdio_read;
+ 	am->mii_bus->write = ag71xx_mdio_write;
+ 	am->mii_bus->reset = ag71xx_mdio_reset;
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+ 	am->mii_bus->irq = am->mii_irq;
++#endif
+ 	am->mii_bus->priv = am;
+ 	am->mii_bus->parent = &pdev->dev;
+ 	snprintf(am->mii_bus->id, MII_BUS_ID_SIZE, "%s", dev_name(&pdev->dev));
+ 	am->mii_bus->phy_mask = pdata->phy_mask;
+ 
+ 	for (i = 0; i < PHY_MAX_ADDR; i++)
+-		am->mii_irq[i] = PHY_POLL;
++		am->mii_bus->irq[i] = PHY_POLL;
+ 
+ 	ag71xx_mdio_wr(am, AG71XX_REG_MAC_CFG1, 0);
+ 
+diff -rNu ./old-2017/ag71xx_phy.c ./new-2020/ag71xx_phy.c
+--- ./old-2017/ag71xx_phy.c	2020-03-30 15:37:20.000000000 +0300
++++ ./new-2020/ag71xx_phy.c	2020-02-27 23:32:54.000000000 +0200
+@@ -112,6 +112,7 @@
+ 		if (!(pdata->phy_mask & (1 << phy_addr)))
+ 			continue;
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+ 		if (ag->mii_bus->phy_map[phy_addr] == NULL)
+ 			continue;
+ 
+@@ -122,6 +123,18 @@
+ 
+ 		if (phydev == NULL)
+ 			phydev = ag->mii_bus->phy_map[phy_addr];
++#else
++		if (ag->mii_bus->mdio_map[phy_addr] == NULL)
++			continue;
++
++		DBG("%s: PHY found at %s, uid=%08x\n",
++			dev_name(dev),
++			dev_name(&ag->mii_bus->mdio_map[phy_addr]->dev),
++			ag->mii_bus->mdio_map[phy_addr]->phy_id);
++
++		if (phydev == NULL)
++			phydev = mdiobus_get_phy(ag->mii_bus, phy_addr);
++#endif
+ 	}
+ 
+ 	if (!phydev) {
+@@ -130,13 +143,21 @@
+ 		return -ENODEV;
+ 	}
+ 
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+ 	ag->phy_dev = phy_connect(ag->dev, dev_name(&phydev->dev),
++#else
++	ag->phy_dev = phy_connect(ag->dev, phydev_name(phydev),
++#endif
+ 				  &ag71xx_phy_link_adjust,
+ 				  pdata->phy_if_mode);
+ 
+ 	if (IS_ERR(ag->phy_dev)) {
+ 		dev_err(dev, "could not connect to PHY at %s\n",
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
+ 			   dev_name(&phydev->dev));
++#else
++			   phydev_name(phydev));
++#endif
+ 		return PTR_ERR(ag->phy_dev);
+ 	}
+ 
+@@ -149,7 +170,12 @@
+ 	phydev->advertising = phydev->supported;
+ 
+ 	dev_info(dev, "connected to PHY at %s [uid=%08x, driver=%s]\n",
+-		    dev_name(&phydev->dev), phydev->phy_id, phydev->drv->name);
++#if LINUX_VERSION_CODE < KERNEL_VERSION(4,5,0)
++		    dev_name(&phydev->dev),
++#else
++		    phydev_name(phydev),
++#endif
++		    phydev->phy_id, phydev->drv->name);
+ 
+ 	ag->link = 0;
+ 	ag->speed = 0;
+diff -rNu ./old-2017/phy/ar8216.c ./new-2020/phy/ar8216.c
+--- ./old-2017/phy/ar8216.c	2020-03-31 14:48:29.885443236 +0300
++++ ./new-2020/phy/ar8216.c	2020-02-27 23:32:54.000000000 +0200
+@@ -177,7 +177,7 @@
+ 	if (ret & BMCR_ANENABLE)
+ 		return 0;
+ 
+-	dev_info(&phydev->dev, "ANEG disabled, re-enabling ...\n");
++	dev_info(&phydev->mdio.dev, "ANEG disabled, re-enabling ...\n");
+ 	ret |= BMCR_ANENABLE | BMCR_ANRESTART;
+ 	return phy_write(phydev, MII_BMCR, ret);
+ }
+@@ -355,6 +355,7 @@
+ 			return 0;
+ 
+ 		usleep_range(1000, 2000);
++		cond_resched();
+ 	}
+ 
+ 	return -ETIMEDOUT;
+@@ -426,6 +427,7 @@
+ 			mib_stats[i] = 0;
+ 		else
+ 			mib_stats[i] += t;
++		cond_resched();
+ 	}
+ }
+ 
+@@ -565,6 +567,7 @@
+ 			break;
+ 
+ 		udelay(10);
++		cond_resched();
+ 	}
+ 
+ 	pr_err("ar8216: timeout on reg %08x: %08x & %08x != %08x\n",
+@@ -730,8 +733,10 @@
+ {
+ 	int timeout = 20;
+ 
+-	while (ar8xxx_mii_read32(priv, r2, r1) & AR8216_ATU_ACTIVE && --timeout)
+-                udelay(10);
++	while (ar8xxx_mii_read32(priv, r2, r1) & AR8216_ATU_ACTIVE && --timeout) {
++		udelay(10);
++		cond_resched();
++	}
+ 
+ 	if (!timeout)
+ 		pr_err("ar8216: timeout waiting for atu to become ready\n");
+@@ -1194,6 +1199,7 @@
+ 	priv->arl_age_time = AR8XXX_DEFAULT_ARL_AGE_TIME;
+ 
+ 	chip->init_globals(priv);
++	chip->atu_flush(priv);
+ 
+ 	mutex_unlock(&priv->reg_mutex);
+ 
+@@ -1695,6 +1701,16 @@
+ 	.apply_config = ar8xxx_sw_hw_apply,
+ 	.reset_switch = ar8xxx_sw_reset_switch,
+ 	.get_port_link = ar8xxx_sw_get_port_link,
++/* The following op is disabled as it hogs the CPU and degrades performance.
++   An implementation has been attempted in 4d8a66d but reading MIB data is slow
++   on ar8xxx switches.
++
++   The high CPU load has been traced down to the ar8xxx_reg_wait() call in
++   ar8xxx_mib_op(), which has to usleep_range() till the MIB busy flag set by
++   the request to update the MIB counter is cleared. */
++#if 0
++	.get_port_stats = ar8xxx_sw_get_port_stats,
++#endif
+ };
+ 
+ static const struct ar8xxx_chip ar8216_chip = {
+@@ -1996,7 +2012,7 @@
+ 
+ 	priv->phy = phydev;
+ 
+-	if (phydev->addr != 0) {
++	if (phydev->mdio.addr != 0) {
+ 		if (chip_is_ar8316(priv)) {
+ 			/* switch device has been initialized, reinit */
+ 			priv->dev.ports = (AR8216_NUM_PORTS - 1);
+@@ -2044,7 +2060,7 @@
+ 		/* flush ARL entries for this port if it went down*/
+ 		if (!link_new)
+ 			priv->chip->atu_flush_port(priv, i);
+-		dev_info(&priv->phy->dev, "Port %d is %s\n",
++		dev_info(&priv->phy->mdio.dev, "Port %d is %s\n",
+ 			 i, link_new ? "up" : "down");
+ 	}
+ 
+@@ -2063,10 +2079,10 @@
+ 	if (phydev->state == PHY_CHANGELINK)
+ 		ar8xxx_check_link_states(priv);
+ 
+-	if (phydev->addr != 0)
++	if (phydev->mdio.addr != 0)
+ 		return genphy_read_status(phydev);
+ 
+-	ar8216_read_port_link(priv, phydev->addr, &link);
++	ar8216_read_port_link(priv, phydev->mdio.addr, &link);
+ 	phydev->link = !!link.link;
+ 	if (!phydev->link)
+ 		return 0;
+@@ -2096,7 +2112,7 @@
+ static int
+ ar8xxx_phy_config_aneg(struct phy_device *phydev)
+ {
+-	if (phydev->addr == 0)
++	if (phydev->mdio.addr == 0)
+ 		return 0;
+ 
+ 	return genphy_config_aneg(phydev);
+@@ -2151,15 +2167,15 @@
+ 	int ret;
+ 
+ 	/* skip PHYs at unused adresses */
+-	if (phydev->addr != 0 && phydev->addr != 4)
++	if (phydev->mdio.addr != 0 && phydev->mdio.addr != 4)
+ 		return -ENODEV;
+ 
+-	if (!ar8xxx_is_possible(phydev->bus))
++	if (!ar8xxx_is_possible(phydev->mdio.bus))
+ 		return -ENODEV;
+ 
+ 	mutex_lock(&ar8xxx_dev_list_lock);
+ 	list_for_each_entry(priv, &ar8xxx_dev_list, list)
+-		if (priv->mii_bus == phydev->bus)
++		if (priv->mii_bus == phydev->mdio.bus)
+ 			goto found;
+ 
+ 	priv = ar8xxx_create();
+@@ -2168,7 +2184,7 @@
+ 		goto unlock;
+ 	}
+ 
+-	priv->mii_bus = phydev->bus;
++	priv->mii_bus = phydev->mdio.bus;
+ 
+ 	ret = ar8xxx_probe_switch(priv);
+ 	if (ret)
+@@ -2189,7 +2205,7 @@
+ found:
+ 	priv->use_count++;
+ 
+-	if (phydev->addr == 0) {
++	if (phydev->mdio.addr == 0) {
+ 		if (ar8xxx_has_gige(priv)) {
+ 			phydev->supported = SUPPORTED_1000baseT_Full;
+ 			phydev->advertising = ADVERTISED_1000baseT_Full;
+@@ -2277,33 +2293,21 @@
+ 	return 0;
+ }
+ 
+-static struct phy_driver ar8xxx_phy_driver = {
+-	.phy_id		= 0x004d0000,
+-	.name		= "Atheros AR8216/AR8236/AR8316",
+-	.phy_id_mask	= 0xffff0000,
+-	.features	= PHY_BASIC_FEATURES,
+-	.probe		= ar8xxx_phy_probe,
+-	.remove		= ar8xxx_phy_remove,
+-	.detach		= ar8xxx_phy_detach,
+-	.config_init	= ar8xxx_phy_config_init,
+-	.config_aneg	= ar8xxx_phy_config_aneg,
+-	.read_status	= ar8xxx_phy_read_status,
+-	.soft_reset	= ar8xxx_phy_soft_reset,
+-	.driver		= { .owner = THIS_MODULE },
++static struct phy_driver ar8xxx_phy_driver[] = {
++	{
++		.phy_id		= 0x004d0000,
++		.name		= "Atheros AR8216/AR8236/AR8316",
++		.phy_id_mask	= 0xffff0000,
++		.features	= PHY_BASIC_FEATURES,
++		.probe		= ar8xxx_phy_probe,
++		.remove		= ar8xxx_phy_remove,
++		.detach		= ar8xxx_phy_detach,
++		.config_init	= ar8xxx_phy_config_init,
++		.config_aneg	= ar8xxx_phy_config_aneg,
++		.read_status	= ar8xxx_phy_read_status,
++		.soft_reset	= ar8xxx_phy_soft_reset,
++	}
+ };
+ 
+-int __init
+-ar8xxx_init(void)
+-{
+-	return phy_driver_register(&ar8xxx_phy_driver);
+-}
+-
+-void __exit
+-ar8xxx_exit(void)
+-{
+-	phy_driver_unregister(&ar8xxx_phy_driver);
+-}
+-
+-module_init(ar8xxx_init);
+-module_exit(ar8xxx_exit);
++module_phy_driver(ar8xxx_phy_driver);
+ MODULE_LICENSE("GPL");
+diff -rNu ./old-2017/phy/ar8216.h ./new-2020/phy/ar8216.h
+--- ./old-2017/phy/ar8216.h	2020-03-31 14:48:29.889443233 +0300
++++ ./new-2020/phy/ar8216.h	2020-02-27 23:32:54.000000000 +0200
+@@ -462,6 +462,7 @@
+ 	bool mirror_tx;
+ 	int source_port;
+ 	int monitor_port;
++	u8 port_vlan_prio[AR8X16_MAX_PORTS];
+ };
+ 
+ u32
+diff -rNu ./old-2017/phy/ar8327.c ./new-2020/phy/ar8327.c
+--- ./old-2017/phy/ar8327.c	2020-03-31 14:48:29.889443233 +0300
++++ ./new-2020/phy/ar8327.c	2020-02-27 23:32:54.000000000 +0200
+@@ -619,11 +619,11 @@
+ 	if (!priv->chip_data)
+ 		return -ENOMEM;
+ 
+-	if (priv->phy->dev.of_node)
+-		ret = ar8327_hw_config_of(priv, priv->phy->dev.of_node);
++	if (priv->phy->mdio.dev.of_node)
++		ret = ar8327_hw_config_of(priv, priv->phy->mdio.dev.of_node);
+ 	else
+ 		ret = ar8327_hw_config_pdata(priv,
+-					     priv->phy->dev.platform_data);
++					     priv->phy->mdio.dev.platform_data);
+ 
+ 	if (ret)
+ 		return ret;
+@@ -885,10 +885,19 @@
+ 
+ 	t = pvid << AR8327_PORT_VLAN0_DEF_SVID_S;
+ 	t |= pvid << AR8327_PORT_VLAN0_DEF_CVID_S;
++	if (priv->vlan && priv->port_vlan_prio[port]) {
++		u32 prio = priv->port_vlan_prio[port];
++
++		t |= prio << AR8327_PORT_VLAN0_DEF_SPRI_S;
++		t |= prio << AR8327_PORT_VLAN0_DEF_CPRI_S;
++	}
+ 	ar8xxx_write(priv, AR8327_REG_PORT_VLAN0(port), t);
+ 
+ 	t = AR8327_PORT_VLAN1_PORT_VLAN_PROP;
+ 	t |= egress << AR8327_PORT_VLAN1_OUT_MODE_S;
++	if (priv->vlan && priv->port_vlan_prio[port])
++		t |= AR8327_PORT_VLAN1_VLAN_PRI_PROP;
++
+ 	ar8xxx_write(priv, AR8327_REG_PORT_VLAN1(port), t);
+ 
+ 	t = members;
+@@ -1028,14 +1037,15 @@
+ 	return 0;
+ }
+ 
+-#if 0
+ static void
+ ar8327_wait_atu_ready(struct ar8xxx_priv *priv, u16 r2, u16 r1)
+ {
+ 	int timeout = 20;
+ 
+-	while (ar8xxx_mii_read32(priv, r2, r1) & AR8327_ATU_FUNC_BUSY && --timeout)
+-                udelay(10);
++	while (ar8xxx_mii_read32(priv, r2, r1) & AR8327_ATU_FUNC_BUSY && --timeout) {
++		udelay(10);
++		cond_resched();
++	}
+ 
+ 	if (!timeout)
+ 		pr_err("ar8327: timeout waiting for atu to become ready\n");
+@@ -1100,7 +1110,6 @@
+ 		break;
+ 	}
+ }
+-#endif
+ 
+ static int
+ ar8327_sw_hw_apply(struct switch_dev *dev)
+@@ -1229,6 +1238,37 @@
+ 	return 0;
+ }
+ 
++static int
++ar8327_sw_set_port_vlan_prio(struct switch_dev *dev, const struct switch_attr *attr,
++			     struct switch_val *val)
++{
++	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
++	int port = val->port_vlan;
++
++	if (port >= dev->ports)
++		return -EINVAL;
++	if (port == 0 || port == 6)
++		return -EOPNOTSUPP;
++	if (val->value.i < 0 || val->value.i > 7)
++		return -EINVAL;
++
++	priv->port_vlan_prio[port] = val->value.i;
++
++	return 0;
++}
++
++static int
++ar8327_sw_get_port_vlan_prio(struct switch_dev *dev, const struct switch_attr *attr,
++                  struct switch_val *val)
++{
++	struct ar8xxx_priv *priv = swdev_to_ar8xxx(dev);
++	int port = val->port_vlan;
++
++	val->value.i = priv->port_vlan_prio[port];
++
++	return 0;
++}
++
+ static const struct switch_attr ar8327_sw_attr_globals[] = {
+ 	{
+ 		.type = SWITCH_TYPE_INT,
+@@ -1275,7 +1315,7 @@
+ 		.set = ar8xxx_sw_set_mirror_source_port,
+ 		.get = ar8xxx_sw_get_mirror_source_port,
+ 		.max = AR8327_NUM_PORTS - 1
+- 	},
++	},
+ 	{
+ 		.type = SWITCH_TYPE_INT,
+ 		.name = "arl_age_time",
+@@ -1350,6 +1390,14 @@
+ 		.get = ar8327_sw_get_port_igmp_snooping,
+ 		.max = 1
+ 	},
++	{
++		.type = SWITCH_TYPE_INT,
++		.name = "vlan_prio",
++		.description = "Port VLAN default priority (VLAN PCP) (0-7)",
++		.set = ar8327_sw_set_port_vlan_prio,
++		.get = ar8327_sw_get_port_vlan_prio,
++		.max = 7,
++	},
+ };
+ 
+ static const struct switch_dev_ops ar8327_sw_ops = {
+@@ -1372,6 +1420,16 @@
+ 	.apply_config = ar8327_sw_hw_apply,
+ 	.reset_switch = ar8xxx_sw_reset_switch,
+ 	.get_port_link = ar8xxx_sw_get_port_link,
++/* The following op is disabled as it hogs the CPU and degrades performance.
++   An implementation has been attempted in 4d8a66d but reading MIB data is slow
++   on ar8xxx switches.
++
++   The high CPU load has been traced down to the ar8xxx_reg_wait() call in
++   ar8xxx_mib_op(), which has to usleep_range() till the MIB busy flag set by
++   the request to update the MIB counter is cleared. */
++#if 0
++	.get_port_stats = ar8xxx_sw_get_port_stats,
++#endif
+ };
+ 
+ const struct ar8xxx_chip ar8327_chip = {
+@@ -1401,9 +1459,7 @@
+ 	.vtu_load_vlan = ar8327_vtu_load_vlan,
+ 	.phy_fixup = ar8327_phy_fixup,
+ 	.set_mirror_regs = ar8327_set_mirror_regs,
+-#if 0
+ 	.get_arl_entry = ar8327_get_arl_entry,
+-#endif
+ 	.sw_hw_apply = ar8327_sw_hw_apply,
+ 
+ 	.num_mibs = ARRAY_SIZE(ar8236_mibs),
+@@ -1438,9 +1494,7 @@
+ 	.vtu_load_vlan = ar8327_vtu_load_vlan,
+ 	.phy_fixup = ar8327_phy_fixup,
+ 	.set_mirror_regs = ar8327_set_mirror_regs,
+-#if 0
+ 	.get_arl_entry = ar8327_get_arl_entry,
+-#endif
+ 	.sw_hw_apply = ar8327_sw_hw_apply,
+ 
+ 	.num_mibs = ARRAY_SIZE(ar8236_mibs),
+diff -rNu ./old-2017/phy/ar8327.h ./new-2020/phy/ar8327.h
+--- ./old-2017/phy/ar8327.h	2020-03-31 14:48:29.889443233 +0300
++++ ./new-2020/phy/ar8327.h	2020-02-27 23:32:54.000000000 +0200
+@@ -164,12 +164,18 @@
+ #define   AR8327_FRAME_ACK_CTRL_S(_i)		(((_i) % 4) * 8)
+ 
+ #define AR8327_REG_PORT_VLAN0(_i)		(0x420 + (_i) * 0x8)
++#define   AR8327_PORT_VLAN0_DEF_PRI_MASK	BITS(0, 3)
+ #define   AR8327_PORT_VLAN0_DEF_SVID		BITS(0, 12)
+ #define   AR8327_PORT_VLAN0_DEF_SVID_S		0
++#define   AR8327_PORT_VLAN0_DEF_SPRI		BITS(13, 3)
++#define   AR8327_PORT_VLAN0_DEF_SPRI_S		13
+ #define   AR8327_PORT_VLAN0_DEF_CVID		BITS(16, 12)
+ #define   AR8327_PORT_VLAN0_DEF_CVID_S		16
++#define   AR8327_PORT_VLAN0_DEF_CPRI		BITS(29, 3)
++#define   AR8327_PORT_VLAN0_DEF_CPRI_S		29
+ 
+ #define AR8327_REG_PORT_VLAN1(_i)		(0x424 + (_i) * 0x8)
++#define   AR8327_PORT_VLAN1_VLAN_PRI_PROP	BIT(4)
+ #define   AR8327_PORT_VLAN1_PORT_VLAN_PROP	BIT(6)
+ #define   AR8327_PORT_VLAN1_OUT_MODE		BITS(12, 2)
+ #define   AR8327_PORT_VLAN1_OUT_MODE_S		12
